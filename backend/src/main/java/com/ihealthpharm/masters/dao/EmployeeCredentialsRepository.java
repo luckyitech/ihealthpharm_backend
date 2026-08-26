@@ -10,8 +10,6 @@ import com.ihealthpharm.masters.model.EmployeeModel;
 
 public interface EmployeeCredentialsRepository extends JpaRepository<EmployeeCredentialsModel, Integer>{
 
-	public EmployeeCredentialsModel findByUserNameAndCurrentPassword(String userName, String currentPassword);
-
 	public EmployeeCredentialsModel findByUserName(String userName);
 	
 	public EmployeeCredentialsModel findByEmployee(EmployeeModel employeeModel);

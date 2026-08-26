@@ -69,6 +69,7 @@ public class JwtAuthenticationRestController {
 		
 		authenticate(authenticationRequest.getUserName(), authenticationRequest.getPassword());
 		EmployeeCredentialsModel users = employeeCredentialsService.findEmployeeCredentialsByUserName(authenticationRequest.getUserName());
+		employeeCredentialsService.upgradeLegacyPasswordIfNeeded(users, authenticationRequest.getPassword());
 		if(users.getActiveS()== 'N')
 		{
 			throw new IHealthPharmException("Account Disabled", HttpStatus.NOT_FOUND);

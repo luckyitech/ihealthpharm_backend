@@ -8,8 +8,10 @@ import javax.transaction.Transactional;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import com.ihealthpharm.config.jwt.LegacyAwarePasswordEncoder;
 import com.ihealthpharm.exception.IHealthPharmException;
 import com.ihealthpharm.masters.dao.EmployeeCredentialsRepository;
 import com.ihealthpharm.masters.dao.EmployeeCredentialsRetriveRepository;
@@ -36,8 +38,12 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 	@Autowired
 	EmployeeCredentialsHelper employeeCredentialsHelper;
 
+	@Autowired
+	PasswordEncoder passwordEncoder;
+
 	@Override
 	public EmployeeCredentialsModel saveEmployeeCredentialsData(EmployeeCredentialsModel employeeCredentialsModel) {
+		encodePasswordFields(employeeCredentialsModel);
 		employeeCredentialsModel = employeeCredentialsRepository.save(employeeCredentialsModel);
 		log.info("Employee Credentials data with ID:" + employeeCredentialsModel.getEmployeeCredentialsId()
 				+ " saved succesfully");
@@ -53,6 +59,7 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 					HttpStatus.NOT_FOUND);
 		}
 
+		encodePasswordFields(employeeCredentialsModel);
 		employeeCredentialsRes = employeeCredentialsRepository.save(employeeCredentialsModel);
 		log.info("Employee Credentials data with ID : " + employeeCredentialsRes.getEmployeeCredentialsId()
 				+ " updated succesfully");
@@ -70,6 +77,7 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 						HttpStatus.NOT_FOUND);
 			}
 
+			encodePasswordFields(employeeCredentialsModel);
 			employeeCredentialsRes = employeeCredentialsRepository.save(employeeCredentialsModel);
 			log.info("Employee Credentials data with ID : " + employeeCredentialsRes.getEmployeeCredentialsId()
 					+ " updated succesfully");
@@ -112,16 +120,6 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 	}
 	
 	@Override
-	public EmployeeCredentialsModel findEmployeeCredentialsByUserNameAndPassword(String userName, String currentPassword) {
-		EmployeeCredentialsModel employeeCredentialsRes = employeeCredentialsRepository.findByUserNameAndCurrentPassword(userName, currentPassword);
-		if (!Objects.nonNull(employeeCredentialsRes)) {
-			throw new IHealthPharmException(employeeCredentialsHelper.getNotFoundEmployeeCredentialsMessage(),
-					HttpStatus.NOT_FOUND);
-		}
-		return employeeCredentialsRes;
-	}
-
-	@Override
 	public EmployeeCredentialsModel findEmployeeCredentialsByUserName(String userName) {
 		EmployeeCredentialsModel employeeCredentialsRes = employeeCredentialsRepository.findByUserName(userName);
 		if (!Objects.nonNull(employeeCredentialsRes)) {
@@ -157,9 +155,37 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 
 	@Override
 	public EmployeeCredentialsModel updateEmpCredentialsData(int empCredId, String newPwd) {
-		 employeeCredentialsRepository.updateEmpCredentials(empCredId,newPwd);
+		 employeeCredentialsRepository.updateEmpCredentials(empCredId, passwordEncoder.encode(newPwd));
 		 return null;
 	}
 
+	@Override
+	public void upgradeLegacyPasswordIfNeeded(EmployeeCredentialsModel employeeCredentialsModel, String rawPassword) {
+		if (LegacyAwarePasswordEncoder.isBCryptHash(employeeCredentialsModel.getCurrentPassword())) {
+			return;
+		}
+		employeeCredentialsModel.setCurrentPassword(passwordEncoder.encode(rawPassword));
+		employeeCredentialsRepository.save(employeeCredentialsModel);
+		log.info("Migrated legacy plaintext password to BCrypt for employee credentials ID:"
+				+ employeeCredentialsModel.getEmployeeCredentialsId());
+	}
+
+	/**
+	 * Encodes currentPassword/previousPassword1/previousPassword2 in place,
+	 * skipping any value that is already a BCrypt hash so callers can safely
+	 * re-save a model without double-hashing an untouched password.
+	 */
+	private void encodePasswordFields(EmployeeCredentialsModel employeeCredentialsModel) {
+		employeeCredentialsModel.setCurrentPassword(encodeIfPlaintext(employeeCredentialsModel.getCurrentPassword()));
+		employeeCredentialsModel.setPreviousPassword1(encodeIfPlaintext(employeeCredentialsModel.getPreviousPassword1()));
+		employeeCredentialsModel.setPreviousPassword2(encodeIfPlaintext(employeeCredentialsModel.getPreviousPassword2()));
+	}
+
+	private String encodeIfPlaintext(String password) {
+		if (password == null || LegacyAwarePasswordEncoder.isBCryptHash(password)) {
+			return password;
+		}
+		return passwordEncoder.encode(password);
+	}
 
 }

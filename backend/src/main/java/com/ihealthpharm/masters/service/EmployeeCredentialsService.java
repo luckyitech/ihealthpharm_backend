@@ -13,9 +13,7 @@ public interface EmployeeCredentialsService {
 	 EmployeeCredentialsModel updateEmployeeCredentialsData(EmployeeCredentialsModel employeeCredentialsModel);
 	
 	 List<EmployeeCredentialsModel> updateEmployeeCredentialsData(List<EmployeeCredentialsModel> employeeCredentialsModels);
-	
-	 EmployeeCredentialsModel findEmployeeCredentialsByUserNameAndPassword(String userName,String password);
-	
+
 	 EmployeeCredentialsModel findEmployeeCredentialsByUserName(String userName);
 	
 	 EmployeeCredentialsRetriveModel findEmployeeCredentialByUserName(String userName);
@@ -31,4 +29,11 @@ public interface EmployeeCredentialsService {
 	public EmployeeCredentialsModel findEmployeeCredentialsByEmployee(EmployeeModel employeeModel);
 
 	EmployeeCredentialsModel updateEmpCredentialsData(int empCredId,String newPwd);
+
+	/**
+	 * Re-hashes and persists {@code rawPassword} for {@code employeeCredentialsModel}
+	 * when its stored password is still the plaintext value from before password
+	 * encryption was introduced. No-op once the row already holds a BCrypt hash.
+	 */
+	void upgradeLegacyPasswordIfNeeded(EmployeeCredentialsModel employeeCredentialsModel, String rawPassword);
 }
