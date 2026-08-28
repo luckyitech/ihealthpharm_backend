@@ -1,6 +1,7 @@
 package com.ihealthpharm.finance.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -17,6 +18,8 @@ import com.ihealthpharm.finance.dto.CreditAllocationPlanLineDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
 import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Works out which bills a credit payment settles.
  *
@@ -30,10 +33,23 @@ import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
  * comparison before it is allowed to update anything.
  */
 @Component
+@Slf4j
 public class CreditAllocationEngine {
 
 	public static final String STATUS_PAID = "Paid";
 	public static final String STATUS_PARTIALLY_PAID = "Partially Paid";
+
+	/**
+	 * Every amount is held to whole cents.
+	 *
+	 * The source columns (account_receivables.AMOUNT_TO_BE_RECEIVED,
+	 * sales.BALANCE_AMOUNT) are FLOAT, so a bill displayed as 1,904.36 actually
+	 * holds 1904.3599853516. Cascading on the raw value leaves a fraction of a
+	 * cent over after the bill is cleared, which then lands on the next bill and
+	 * wrongly marks it partially paid. Rounding on the way in removes that.
+	 */
+	private static final int MONEY_SCALE = 2;
+	private static final RoundingMode MONEY_ROUNDING = RoundingMode.HALF_UP;
 
 	/**
 	 * Debt older than this forces the user to choose the order explicitly rather
@@ -55,42 +71,48 @@ public class CreditAllocationEngine {
 	public CreditAllocationPlanDTO buildPlan(List<OpenBillDTO> openBills, BigDecimal paymentAmount,
 			String allocationOrder, boolean orderConfirmed, LocalDate today) {
 
-		if (!Objects.nonNull(paymentAmount) || paymentAmount.signum() <= 0) {
-			throw new IHealthPharmException("Payment amount must be greater than zero.", HttpStatus.BAD_REQUEST);
-		}
-
+		BigDecimal payment = validatedPayment(paymentAmount);
+		LocalDate asOf = validatedToday(today);
 		String order = resolveOrder(allocationOrder);
 		List<OpenBillDTO> settleable = settleableBills(openBills);
 
 		CreditAllocationPlanDTO plan = new CreditAllocationPlanDTO();
-		plan.setPaymentAmount(paymentAmount);
+		plan.setPaymentAmount(payment);
 		plan.setAllocationOrder(order);
 		plan.setOpenBillCount(settleable.size());
-		plan.setAllocatedAmount(BigDecimal.ZERO);
-		plan.setUnallocatedAmount(paymentAmount);
+		plan.setAllocatedAmount(money(BigDecimal.ZERO));
+		plan.setUnallocatedAmount(payment);
 
 		if (settleable.isEmpty()) {
 			// Nothing to settle - the whole payment is a credit on the account.
+			log.info("Credit allocation: no open bills, {} left unallocated", payment);
 			return plan;
 		}
 
 		sort(settleable, order);
 		plan.setOldestBillDate(oldestBillDate(settleable));
 
-		if (confirmationNeeded(plan.getOldestBillDate(), today, orderConfirmed)) {
+		if (confirmationNeeded(plan.getOldestBillDate(), asOf, orderConfirmed)) {
 			// Deliberately no lines: the caller must come back with a confirmed order.
 			plan.setOrderConfirmationRequired(true);
+			log.info("Credit allocation held for order confirmation: oldest open bill {} is beyond the {} year threshold",
+					plan.getOldestBillDate(), ageingThresholdYears);
 			return plan;
 		}
 
-		cascade(plan, settleable, paymentAmount);
+		cascade(plan, settleable, payment);
+
+		log.info("Credit allocation planned: payment {} over {} open bills, {} settled across {} bills, {} unallocated ({} order)",
+				payment, settleable.size(), plan.getAllocatedAmount(), plan.getLines().size(),
+				plan.getUnallocatedAmount(), order);
+
 		return plan;
 	}
 
 	/** Fills each bill in turn until the payment is exhausted. */
 	private void cascade(CreditAllocationPlanDTO plan, List<OpenBillDTO> bills, BigDecimal paymentAmount) {
 		BigDecimal remaining = paymentAmount;
-		BigDecimal allocated = BigDecimal.ZERO;
+		BigDecimal allocated = money(BigDecimal.ZERO);
 		int sequence = 1;
 
 		for (OpenBillDTO bill : bills) {
@@ -98,7 +120,7 @@ public class CreditAllocationEngine {
 				break;
 			}
 
-			BigDecimal outstanding = bill.getOutstanding();
+			BigDecimal outstanding = money(bill.getOutstanding());
 			BigDecimal applied = remaining.min(outstanding);
 
 			CreditAllocationPlanLineDTO line = new CreditAllocationPlanLineDTO();
@@ -134,10 +156,22 @@ public class CreditAllocationEngine {
 		if (!Objects.nonNull(openBills)) {
 			return settleable;
 		}
+
 		for (OpenBillDTO bill : openBills) {
-			if (Objects.nonNull(bill.getOutstanding()) && bill.getOutstanding().signum() > 0) {
-				settleable.add(bill);
+			if (!Objects.nonNull(bill) || !Objects.nonNull(bill.getOutstanding())) {
+				continue;
 			}
+			if (money(bill.getOutstanding()).signum() <= 0) {
+				continue;
+			}
+			if (!Objects.nonNull(bill.getAccountReceivablesId())) {
+				// Refuse rather than skip: skipping would silently send the
+				// customer's money to a different bill than the one on screen.
+				throw new IHealthPharmException(
+						"Cannot allocate payment: an outstanding bill is missing its receivable reference.",
+						HttpStatus.INTERNAL_SERVER_ERROR);
+			}
+			settleable.add(bill);
 		}
 		return settleable;
 	}
@@ -168,15 +202,53 @@ public class CreditAllocationEngine {
 		if (orderConfirmed || !Objects.nonNull(oldestBillDate)) {
 			return false;
 		}
+		if (ageingThresholdYears <= 0) {
+			// Misconfigured threshold: ask rather than assume it is safe to cascade.
+			log.warn("credit.allocation.ageing.threshold.years is {}, which is not usable - "
+					+ "requiring explicit order confirmation", ageingThresholdYears);
+			return true;
+		}
 		return oldestBillDate.isBefore(today.minusYears(ageingThresholdYears));
 	}
 
+	private BigDecimal validatedPayment(BigDecimal paymentAmount) {
+		if (!Objects.nonNull(paymentAmount)) {
+			throw new IHealthPharmException("Payment amount is required.", HttpStatus.BAD_REQUEST);
+		}
+		BigDecimal payment = money(paymentAmount);
+		if (payment.signum() <= 0) {
+			throw new IHealthPharmException("Payment amount must be greater than zero.", HttpStatus.BAD_REQUEST);
+		}
+		return payment;
+	}
+
+	private LocalDate validatedToday(LocalDate today) {
+		if (!Objects.nonNull(today)) {
+			throw new IHealthPharmException("A date is required to apply the credit ageing rule.",
+					HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+		return today;
+	}
+
 	private String resolveOrder(String allocationOrder) {
-		if (CreditAllocationBatchModel.ORDER_NEWEST.equalsIgnoreCase(allocationOrder)) {
+		String requested = Objects.nonNull(allocationOrder) ? allocationOrder.trim() : "";
+
+		if (CreditAllocationBatchModel.ORDER_NEWEST.equalsIgnoreCase(requested)) {
 			return CreditAllocationBatchModel.ORDER_NEWEST;
+		}
+		if (!requested.isEmpty() && !CreditAllocationBatchModel.ORDER_OLDEST.equalsIgnoreCase(requested)) {
+			// Falling back silently would settle the wrong bills if the caller
+			// meant newest-first, so make the mismatch visible.
+			log.warn("Unrecognised allocation order '{}' - defaulting to {}", allocationOrder,
+					CreditAllocationBatchModel.ORDER_OLDEST);
 		}
 		// Oldest first is the default.
 		return CreditAllocationBatchModel.ORDER_OLDEST;
+	}
+
+	/** Rounds to whole cents so the cascade cannot leave sub-cent remainders behind. */
+	private BigDecimal money(BigDecimal amount) {
+		return amount.setScale(MONEY_SCALE, MONEY_ROUNDING);
 	}
 
 	protected void setAgeingThresholdYears(int ageingThresholdYears) {
