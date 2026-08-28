@@ -20,6 +20,23 @@ import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchModel, Integer> {
 
 	/**
+	 * Keeps settled bills out of the cascade.
+	 *
+	 * 615 open receivables claim money on sales bills that carry no balance -
+	 * around 5.7m in total. The bill was paid but its receivable rows were never
+	 * closed, so the debt only exists on one side. Settling one of those drives
+	 * the bill's balance negative: DPSB2405210150 has a NET_AMOUNT of 7,894 and
+	 * has already received exactly that, yet two of its rows still claim 12,453
+	 * outstanding.
+	 *
+	 * A receivable with no matching bill is kept - 528 of the oldest rows no
+	 * longer join to one, and there is nothing to contradict them.
+	 */
+	String STALE_BILL_GUARD =
+		"  AND (COALESCE(s1.BILL_ID, s2.BILL_ID) IS NULL "
+		+ "       OR COALESCE(s1.BALANCE_AMOUNT, s2.BALANCE_AMOUNT) > 0) ";
+
+	/**
 	 * Columns, in order: receivable id, sales bill id, bill code, bill date,
 	 * outstanding, payment status.
 	 *
@@ -39,7 +56,8 @@ public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchM
 		+ "  AND ar.SOURCE_TYPE = 'Sales Billing' "
 		+ "  AND ar.PAYMENT_STATUS IN ('Pending','Partially Paid') "
 		+ "  AND ar.AMOUNT_TO_BE_RECEIVED > 0 "
-		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y'")
+		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' "
+		+ STALE_BILL_GUARD)
 	List<Object[]> findOpenBillsByMasterAccount(@Param("masterAccountNo") String masterAccountNo);
 
 	/** As above, for customers with no credit account. */
@@ -54,7 +72,8 @@ public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchM
 		+ "  AND ar.SOURCE_TYPE = 'Sales Billing' "
 		+ "  AND ar.PAYMENT_STATUS IN ('Pending','Partially Paid') "
 		+ "  AND ar.AMOUNT_TO_BE_RECEIVED > 0 "
-		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y'")
+		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' "
+		+ STALE_BILL_GUARD)
 	List<Object[]> findOpenBillsByCustomerName(@Param("customerName") String customerName);
 
 	/**

@@ -32,6 +32,8 @@ import com.ihealthpharm.finance.service.CreditAllocationEngine;
 import com.ihealthpharm.finance.service.CreditAllocationService;
 import com.ihealthpharm.finance.service.GeneralLedgerService;
 import com.ihealthpharm.masters.service.EmployeeCredentialsService;
+import com.ihealthpharm.sales.dao.SalesRepository;
+import com.ihealthpharm.sales.model.SalesModel;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -74,6 +76,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Autowired
 	GeneralLedgerService generalLedgerService;
+
+	@Autowired
+	SalesRepository salesRepository;
 
 	@Override
 	public List<OpenBillDTO> findOpenBills(CreditAllocationRequestDTO request) {
@@ -213,6 +218,8 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 							"Outstanding bill " + line.getBillCode() + " could not be loaded.",
 							HttpStatus.NOT_FOUND));
 
+			refuseIfBillCannotAbsorb(line);
+
 			boolean settledInFull = CreditAllocationEngine.STATUS_PAID
 					.equals(line.getResultingPaymentStatus());
 
@@ -245,6 +252,37 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		// this leaves the receivable updated and the accounts unbalanced.
 		generalLedgerService.saveMultipleLedgersDataForAccRecievables(
 				Objects.nonNull(settled) && !settled.isEmpty() ? settled : payload);
+	}
+
+	/**
+	 * Refuses to settle a bill whose own balance cannot absorb the payment.
+	 *
+	 * The open-bill query already filters these out, so reaching here means the
+	 * bill was settled by some other route between the plan being built and
+	 * applied. Settling anyway would drive the bill's balance below zero rather
+	 * than reduce a real debt, so it stops instead - the receivable and the bill
+	 * disagree, and only a person can say which is right.
+	 */
+	private void refuseIfBillCannotAbsorb(CreditAllocationPlanLineDTO line) {
+		if (!Objects.nonNull(line.getSalesBillId())) {
+			// Nothing to check against; 528 of the oldest rows have no bill.
+			return;
+		}
+
+		SalesModel bill = salesRepository.findById(line.getSalesBillId()).orElse(null);
+		if (!Objects.nonNull(bill) || !Objects.nonNull(bill.getBalanceAmount())) {
+			return;
+		}
+
+		BigDecimal billBalance = BigDecimal.valueOf(bill.getBalanceAmount());
+		if (billBalance.compareTo(line.getAmountApplied()) < 0) {
+			log.warn("Refusing to settle {}: bill balance {} cannot absorb {}", line.getBillCode(),
+					billBalance, line.getAmountApplied());
+			throw new IHealthPharmException(
+					"Bill " + line.getBillCode() + " shows " + billBalance
+					+ " outstanding but the receivable claims more. Settle it manually after the records are corrected.",
+					HttpStatus.CONFLICT);
+		}
 	}
 
 	/** Batch reference in the house style: DPCA + ddMMyy + a daily sequence. */
