@@ -21,4 +21,13 @@ public class CreditAllocationHelper {
 	@Value("${creditAllocation.applied.response}")
 	public String appliedMessage;
 
+	@Value("${creditAllocation.chequeApproved.response}")
+	public String chequeApprovedMessage;
+
+	@Value("${creditAllocation.reversed.response}")
+	public String reversedMessage;
+
+	@Value("${creditAllocation.reversalFlagged.response}")
+	public String reversalFlaggedMessage;
+
 }

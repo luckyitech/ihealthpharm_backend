@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS `credit_allocation_batch` (
   `PAYMENT_REF`           varchar(50)     DEFAULT NULL COMMENT 'Cheque no, M-Pesa code, card auth code',
   `CHEQUE_ID`             int             DEFAULT NULL COMMENT 'Set for cheques - allocation waits on approval',
 
-  `STATUS`                varchar(20)     NOT NULL DEFAULT 'ALLOCATED'
+  `STATUS`                varchar(30)     NOT NULL DEFAULT 'ALLOCATED'
                                           COMMENT 'HELD_PENDING_APPROVAL | ALLOCATED | REVERSED | REVERSAL_FLAGGED',
 
   `OVERPAYMENT_ACTION`    varchar(20)     DEFAULT NULL COMMENT 'REFUND | HOLD_ON_ACCOUNT - chosen by the user',

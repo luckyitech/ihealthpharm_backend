@@ -4,7 +4,9 @@ import java.util.List;
 
 import com.ihealthpharm.finance.dto.CreditAllocationPlanDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationRequestDTO;
+import com.ihealthpharm.finance.dto.CreditSettlementActionDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
+import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 
 public interface CreditAllocationService {
 
@@ -33,5 +35,25 @@ public interface CreditAllocationService {
 	 * @param userName the signed-in user, whose PIN is checked
 	 */
 	CreditAllocationPlanDTO applyAllocation(CreditAllocationRequestDTO request, String userName);
+
+	/**
+	 * Settles a cheque batch that was held pending approval.
+	 *
+	 * Until this runs the debt stands, so a cheque that is never approved simply
+	 * leaves the bills outstanding.
+	 */
+	CreditAllocationBatchModel approveChequeSettlement(CreditSettlementActionDTO action, String userName);
+
+	/**
+	 * Unwinds a settlement, putting every bill back exactly as it was.
+	 *
+	 * Each line restores its receivable from the values recorded when it was
+	 * settled, the bills are then rebuilt from those receivables, and the credit
+	 * limit returns to what the batch recorded. Set
+	 * {@code reverseAutomatically} false to flag the batch for review instead of
+	 * unwinding it, so a bounced cheque can either reverse itself or wait for
+	 * someone to look at it.
+	 */
+	CreditAllocationBatchModel reverseSettlement(CreditSettlementActionDTO action, String userName);
 
 }

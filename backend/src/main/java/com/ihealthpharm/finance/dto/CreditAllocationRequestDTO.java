@@ -2,6 +2,7 @@ package com.ihealthpharm.finance.dto;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 import lombok.Data;
 
@@ -47,6 +48,12 @@ public class CreditAllocationRequestDTO implements Serializable {
 
 	/** Set for cheque payments - allocation then waits on approval. */
 	private Integer chequeId;
+
+	/**
+	 * Date on the cheque. Required for a cheque payment: the receivables update
+	 * writes it onto the sales bill and fails outright if it is missing.
+	 */
+	private LocalDate chequeDate;
 
 	/** REFUND or HOLD_ON_ACCOUNT, needed only when the payment exceeds all bills. */
 	private String overpaymentAction;

@@ -25,6 +25,7 @@ import com.ihealthpharm.finance.dao.OpenBillRepository;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanLineDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationRequestDTO;
+import com.ihealthpharm.finance.dto.CreditSettlementActionDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
 import com.ihealthpharm.finance.model.AccountReceivablesModel;
 import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
@@ -33,6 +34,8 @@ import com.ihealthpharm.finance.service.AccountReceivablesService;
 import com.ihealthpharm.finance.service.CreditAllocationEngine;
 import com.ihealthpharm.finance.service.CreditAllocationService;
 import com.ihealthpharm.finance.service.GeneralLedgerService;
+import com.ihealthpharm.masters.dao.MasterAccountRepository;
+import com.ihealthpharm.masters.model.MasterAccountModel;
 import com.ihealthpharm.masters.service.EmployeeCredentialsService;
 import com.ihealthpharm.sales.dao.SalesRepository;
 import com.ihealthpharm.sales.model.SalesModel;
@@ -54,6 +57,11 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	/** Status a receivable carries once its payment has been approved. */
 	private static final String STATUS_APPROVED = "Approved";
+
+	/** A bill with nothing received against it. */
+	private static final String STATUS_PENDING = "Pending";
+
+	private static final String PAYMENT_TYPE_CHEQUE = "Cheque";
 
 	@Autowired
 	OpenBillRepository openBillRepository;
@@ -81,6 +89,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Autowired
 	SalesRepository salesRepository;
+
+	@Autowired
+	MasterAccountRepository masterAccountRepository;
 
 	@Override
 	public List<OpenBillDTO> findOpenBills(CreditAllocationRequestDTO request) {
@@ -136,6 +147,8 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 					HttpStatus.CONFLICT);
 		}
 
+		requireChequeDetails(request);
+
 		CreditAllocationBatchModel batch = saveBatch(request, plan, userName);
 		saveLines(batch, plan);
 
@@ -145,11 +158,214 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			return plan;
 		}
 
-		settle(request, plan);
+		settle(request, plan, batch);
 		log.info("Credit settlement {} applied: {} across {} bills for user {}", batch.getBatchRef(),
 				plan.getAllocatedAmount(), plan.getLines().size(), userName);
 
 		return plan;
+	}
+
+	@Override
+	public CreditAllocationBatchModel approveChequeSettlement(CreditSettlementActionDTO action, String userName) {
+		employeeCredentialsService.verifyApprovalPin(userName, action.getApprovalPin());
+
+		CreditAllocationBatchModel batch = requireBatch(action.getBatchRef());
+
+		if (!CreditAllocationBatchModel.STATUS_HELD_PENDING_APPROVAL.equals(batch.getStatus())) {
+			throw new IHealthPharmException(
+					"Settlement " + batch.getBatchRef() + " is " + batch.getStatus()
+					+ " and is not waiting on cheque approval.", HttpStatus.CONFLICT);
+		}
+
+		CreditAllocationPlanDTO plan = planFromBatch(batch);
+		settle(toRequest(batch), plan, batch);
+
+		batch.setStatus(CreditAllocationBatchModel.STATUS_ALLOCATED);
+		batch.setApprovedBy(action.getApprovedBy());
+		batch.setApprovedDate(new Date());
+		log.info("Cheque settlement {} approved by {}: {} across {} bills", batch.getBatchRef(), userName,
+				batch.getAllocatedAmount(), plan.getLines().size());
+
+		return creditAllocationBatchRepository.save(batch);
+	}
+
+	@Override
+	public CreditAllocationBatchModel reverseSettlement(CreditSettlementActionDTO action, String userName) {
+		employeeCredentialsService.verifyApprovalPin(userName, action.getApprovalPin());
+
+		if (StringUtils.isBlank(action.getReason())) {
+			throw new IHealthPharmException("A reason is required to reverse a settlement.",
+					HttpStatus.BAD_REQUEST);
+		}
+
+		CreditAllocationBatchModel batch = requireBatch(action.getBatchRef());
+
+		if (CreditAllocationBatchModel.STATUS_REVERSED.equals(batch.getStatus())) {
+			throw new IHealthPharmException("Settlement " + batch.getBatchRef() + " has already been reversed.",
+					HttpStatus.CONFLICT);
+		}
+
+		batch.setReversalReason(action.getReason());
+		batch.setReversedBy(action.getApprovedBy());
+		batch.setReversedDate(new Date());
+
+		if (!action.isReverseAutomatically()) {
+			// Flagged only: the settlement stands until someone reviews it.
+			batch.setStatus(CreditAllocationBatchModel.STATUS_REVERSAL_FLAGGED);
+			log.warn("Settlement {} flagged for reversal by {}: {}", batch.getBatchRef(), userName,
+					action.getReason());
+			return creditAllocationBatchRepository.save(batch);
+		}
+
+		if (CreditAllocationBatchModel.STATUS_HELD_PENDING_APPROVAL.equals(batch.getStatus())) {
+			// Never settled, so there is nothing to put back - the lines carry no
+			// prior state, and restoring from them would blank the receivables.
+			log.info("Held settlement {} cancelled before approval", batch.getBatchRef());
+		} else {
+			unwind(batch);
+		}
+		batch.setStatus(CreditAllocationBatchModel.STATUS_REVERSED);
+		log.warn("Settlement {} reversed by {}: {}", batch.getBatchRef(), userName, action.getReason());
+
+		return creditAllocationBatchRepository.save(batch);
+	}
+
+	/**
+	 * Puts every bill in the batch back as it was.
+	 *
+	 * Each receivable is restored from the values recorded when it was settled -
+	 * not recalculated - so a bill that was already Partially Paid returns to
+	 * Partially Paid rather than Pending. The bills themselves are then rebuilt
+	 * from those receivables, and the credit limit returns to the figure the
+	 * batch recorded rather than being adjusted by the amount allocated.
+	 */
+	private void unwind(CreditAllocationBatchModel batch) {
+		List<CreditAllocationLineModel> lines = creditAllocationLineRepository
+				.findByAllocationBatchAllocationBatchIdOrderBySequenceNoAsc(batch.getAllocationBatchId());
+
+		if (lines.isEmpty()) {
+			throw new IHealthPharmException(
+					"Settlement " + batch.getBatchRef() + " has no recorded lines and cannot be reversed.",
+					HttpStatus.CONFLICT);
+		}
+
+		CreditAllocationPlanDTO restored = new CreditAllocationPlanDTO();
+
+		for (CreditAllocationLineModel line : lines) {
+			AccountReceivablesModel receivable = accountReceivablesRepository
+					.findById(line.getAccountReceivablesId())
+					.orElseThrow(() -> new IHealthPharmException(
+							"Receivable behind " + line.getBillCode() + " no longer exists, so the settlement "
+							+ "cannot be reversed automatically.", HttpStatus.CONFLICT));
+
+			receivable.setAmountToBeReceived(toFloat(line.getPriorBalance()));
+			receivable.setAmountReceived(toFloat(line.getPriorAmountReceived()));
+			receivable.setPartialAmt(toFloat(line.getPriorPartialAmt()));
+			receivable.setPaymentStatus(line.getPriorPaymentStatus());
+			receivable.setStatus(line.getPriorStatus());
+			receivable.setPaymentType(line.getPriorPaymentType());
+			receivable.setApprovedBy(line.getPriorApprovedBy());
+			receivable.setApprovedDate(line.getPriorApprovedDate());
+			accountReceivablesRepository.save(receivable);
+
+			CreditAllocationPlanLineDTO planLine = new CreditAllocationPlanLineDTO();
+			planLine.setBillCode(line.getBillCode());
+			restored.getLines().add(planLine);
+
+			line.setActiveS('N');
+			creditAllocationLineRepository.save(line);
+		}
+
+		// Rebuild the bills from the receivables just restored.
+		reconcileBills(restored);
+		restoreCreditLimit(batch);
+	}
+
+	private void restoreCreditLimit(CreditAllocationBatchModel batch) {
+		if (!Objects.nonNull(batch.getPriorCreditLimitLeft())
+				|| StringUtils.isBlank(batch.getMasterAccountNo())) {
+			return;
+		}
+
+		MasterAccountModel account = masterAccountRepository
+				.getDataByMasterCreditNumber(batch.getMasterAccountNo());
+		if (!Objects.nonNull(account)) {
+			return;
+		}
+
+		account.setCreditLimitLeft(batch.getPriorCreditLimitLeft().intValue());
+		masterAccountRepository.save(account);
+		log.info("Credit limit for {} restored to {}", batch.getMasterAccountNo(),
+				batch.getPriorCreditLimitLeft());
+	}
+
+	private CreditAllocationBatchModel requireBatch(String batchRef) {
+		if (StringUtils.isBlank(batchRef)) {
+			throw new IHealthPharmException("A settlement reference is required.", HttpStatus.BAD_REQUEST);
+		}
+		CreditAllocationBatchModel batch = creditAllocationBatchRepository.findByBatchRef(batchRef.trim());
+		if (!Objects.nonNull(batch)) {
+			throw new IHealthPharmException("Settlement " + batchRef + " was not found.", HttpStatus.NOT_FOUND);
+		}
+		return batch;
+	}
+
+	/** Rebuilds the plan from the lines recorded when the batch was created. */
+	private CreditAllocationPlanDTO planFromBatch(CreditAllocationBatchModel batch) {
+		CreditAllocationPlanDTO plan = new CreditAllocationPlanDTO();
+		plan.setPaymentAmount(batch.getPaymentAmount());
+		plan.setAllocatedAmount(batch.getAllocatedAmount());
+		plan.setUnallocatedAmount(batch.getUnallocatedAmount());
+		plan.setAllocationOrder(batch.getAllocationOrder());
+
+		for (CreditAllocationLineModel line : creditAllocationLineRepository
+				.findByAllocationBatchAllocationBatchIdOrderBySequenceNoAsc(batch.getAllocationBatchId())) {
+
+			CreditAllocationPlanLineDTO planLine = new CreditAllocationPlanLineDTO();
+			planLine.setSequenceNo(line.getSequenceNo());
+			planLine.setAccountReceivablesId(line.getAccountReceivablesId());
+			planLine.setSalesBillId(line.getSalesBillId());
+			planLine.setBillCode(line.getBillCode());
+			planLine.setBillDate(line.getBillDate());
+			planLine.setAmountApplied(line.getAmountApplied());
+			planLine.setPriorBalance(line.getPriorBalance());
+			planLine.setPriorPaymentStatus(line.getPriorPaymentStatus());
+			planLine.setResultingPaymentStatus(line.getResultingPaymentStatus());
+			plan.getLines().add(planLine);
+		}
+		return plan;
+	}
+
+	private CreditAllocationRequestDTO toRequest(CreditAllocationBatchModel batch) {
+		CreditAllocationRequestDTO request = new CreditAllocationRequestDTO();
+		request.setMasterAccountNo(batch.getMasterAccountNo());
+		request.setCustomerId(batch.getCustomerId());
+		request.setPharmacyId(batch.getPharmacyId());
+		request.setPaymentType(batch.getPaymentType());
+		request.setPaymentRef(batch.getPaymentRef());
+		request.setApprovedBy(batch.getApprovedBy());
+		request.setChequeDate(Objects.nonNull(batch.getApprovedDate())
+				? new java.sql.Date(batch.getApprovedDate().getTime()).toLocalDate() : LocalDate.now());
+		return request;
+	}
+
+	private Float toFloat(BigDecimal value) {
+		return Objects.nonNull(value) ? value.floatValue() : null;
+	}
+
+	/**
+	 * A cheque cannot be settled without its number and date - the receivables
+	 * update writes both onto the sales bill and reads the date without a null
+	 * check, so a missing one fails mid-settlement rather than up front.
+	 */
+	private void requireChequeDetails(CreditAllocationRequestDTO request) {
+		if (!PAYMENT_TYPE_CHEQUE.equalsIgnoreCase(request.getPaymentType())) {
+			return;
+		}
+		if (StringUtils.isBlank(request.getPaymentRef()) || !Objects.nonNull(request.getChequeDate())) {
+			throw new IHealthPharmException("A cheque number and cheque date are required to settle by cheque.",
+					HttpStatus.BAD_REQUEST);
+		}
 	}
 
 	/** A cheque is recorded on receipt but only settles once approved. */
@@ -176,6 +392,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		batch.setOverpaymentAction(request.getOverpaymentAction());
 		batch.setApprovedBy(request.getApprovedBy());
 		batch.setApprovedDate(new Date());
+		batch.setPriorCreditLimitLeft(currentCreditLimitLeft(request.getMasterAccountNo()));
 		batch.setBackfillS(request.isBackfill() ? 'Y' : 'N');
 		batch.setActiveS('Y');
 		batch.setCreatedUser(userName);
@@ -184,6 +401,16 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				: CreditAllocationBatchModel.STATUS_ALLOCATED);
 
 		return creditAllocationBatchRepository.save(batch);
+	}
+
+	/** Recorded before settling, so reversal restores rather than recalculates. */
+	private BigDecimal currentCreditLimitLeft(String masterAccountNo) {
+		if (StringUtils.isBlank(masterAccountNo)) {
+			return null;
+		}
+		MasterAccountModel account = masterAccountRepository.getDataByMasterCreditNumber(masterAccountNo.trim());
+		return Objects.nonNull(account) && Objects.nonNull(account.getCreditLimitLeft())
+				? BigDecimal.valueOf(account.getCreditLimitLeft()) : null;
 	}
 
 	private void saveLines(CreditAllocationBatchModel batch, CreditAllocationPlanDTO plan) {
@@ -210,7 +437,8 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	 * sales bill, credit limit and ledger are all updated by the code that
 	 * already does it.
 	 */
-	private void settle(CreditAllocationRequestDTO request, CreditAllocationPlanDTO plan) {
+	private void settle(CreditAllocationRequestDTO request, CreditAllocationPlanDTO plan,
+			CreditAllocationBatchModel batch) {
 		List<AccountReceivablesModel> payload = new ArrayList<>();
 
 		for (CreditAllocationPlanLineDTO line : plan.getLines()) {
@@ -237,6 +465,12 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 					? receivable.getAmountReceived() : 0f;
 			float nowReceived = alreadyReceived + line.getAmountApplied().floatValue();
 
+			// Everything settlement is about to overwrite, recorded before it does.
+			// Reversal restores these verbatim rather than inferring them - STATUS
+			// in particular cannot be worked out afterwards, since a row may
+			// already have been Approved.
+			recordPriorState(batch, line, receivable);
+
 			receivable.setAmountReceived(nowReceived);
 			receivable.setPartialAmt(settledInFull ? 0f : nowReceived);
 			receivable.setAmountToBeReceived(settledInFull ? 0f
@@ -246,6 +480,14 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			receivable.setPaymentType(request.getPaymentType());
 			receivable.setApprovedBy(request.getApprovedBy());
 			receivable.setApprovedDate(LocalDate.now());
+
+			if (PAYMENT_TYPE_CHEQUE.equalsIgnoreCase(request.getPaymentType())) {
+				// The receivables update copies these onto the sales bill and
+				// dereferences the date without checking it, so both must be set.
+				receivable.setChequeNumber(request.getPaymentRef());
+				receivable.setChequeDate(request.getChequeDate());
+				receivable.setChequeAmount(line.getAmountApplied().doubleValue());
+			}
 
 			if (StringUtils.isNotBlank(request.getReceiptNumber())) {
 				receivable.setReceiptNumber(request.getReceiptNumber());
@@ -264,6 +506,35 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				Objects.nonNull(settled) && !settled.isEmpty() ? settled : payload);
 
 		reconcileBills(plan);
+	}
+
+	/**
+	 * Copies a receivable's current values onto its allocation line, so a
+	 * reversal can put them back exactly as they were.
+	 */
+	private void recordPriorState(CreditAllocationBatchModel batch, CreditAllocationPlanLineDTO planLine,
+			AccountReceivablesModel receivable) {
+
+		List<CreditAllocationLineModel> lines = creditAllocationLineRepository
+				.findByAllocationBatchAllocationBatchIdOrderBySequenceNoAsc(batch.getAllocationBatchId());
+
+		for (CreditAllocationLineModel line : lines) {
+			if (!planLine.getSequenceNo().equals(line.getSequenceNo())) {
+				continue;
+			}
+			line.setPriorAmountReceived(toBigDecimal(receivable.getAmountReceived()));
+			line.setPriorPartialAmt(toBigDecimal(receivable.getPartialAmt()));
+			line.setPriorStatus(receivable.getStatus());
+			line.setPriorPaymentType(receivable.getPaymentType());
+			line.setPriorApprovedBy(receivable.getApprovedBy());
+			line.setPriorApprovedDate(receivable.getApprovedDate());
+			creditAllocationLineRepository.save(line);
+			return;
+		}
+	}
+
+	private BigDecimal toBigDecimal(Float value) {
+		return Objects.nonNull(value) ? BigDecimal.valueOf(value) : null;
 	}
 
 	/**
@@ -300,8 +571,17 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			bill.setPaidAmount(cleared ? bill.getNetAmount() : received.floatValue());
 			bill.setBalanceAmount(cleared ? 0f : balance.floatValue());
 			bill.setCreditAmount(cleared ? 0d : balance.doubleValue());
-			bill.setPaymentStatus(cleared ? CreditAllocationEngine.STATUS_PAID
-					: CreditAllocationEngine.STATUS_PARTIALLY_PAID);
+
+			// Three states, not two. A bill with nothing against it is Pending -
+			// calling it Partially Paid would leave a reversed settlement looking
+			// as though something had still been paid.
+			if (cleared) {
+				bill.setPaymentStatus(CreditAllocationEngine.STATUS_PAID);
+			} else if (received.signum() > 0) {
+				bill.setPaymentStatus(CreditAllocationEngine.STATUS_PARTIALLY_PAID);
+			} else {
+				bill.setPaymentStatus(STATUS_PENDING);
+			}
 
 			salesRepository.save(bill);
 			log.info("Bill {} reconciled: received {} of {}, balance {} -> {}", billCode, received,

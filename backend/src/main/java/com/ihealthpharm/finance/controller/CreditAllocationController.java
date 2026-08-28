@@ -17,7 +17,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.ihealthpharm.commons.BaseDto;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationRequestDTO;
+import com.ihealthpharm.finance.dto.CreditSettlementActionDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
+import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 import com.ihealthpharm.finance.helper.CreditAllocationHelper;
 import com.ihealthpharm.finance.service.CreditAllocationService;
 
@@ -90,6 +92,37 @@ public class CreditAllocationController {
 				: creditAllocationHelper.getAppliedMessage();
 
 		return new BaseDto<>(plan, message, OK).respond();
+	}
+
+	/** Settles a cheque payment that was held until the cheque cleared. */
+	@PostMapping("/creditAllocation/approveCheque")
+	public ResponseEntity<BaseDto<CreditAllocationBatchModel>> approveCheque(
+			@Valid @RequestBody CreditSettlementActionDTO action, Principal principal) {
+
+		CreditAllocationBatchModel batch = creditAllocationService
+				.approveChequeSettlement(action, principal.getName());
+
+		return new BaseDto<>(batch, creditAllocationHelper.getChequeApprovedMessage(), OK).respond();
+	}
+
+	/**
+	 * Unwinds a settlement, or flags it for review.
+	 *
+	 * Send reverseAutomatically false to leave the settlement standing and only
+	 * mark it, so a bounced cheque can wait for someone to look at it.
+	 */
+	@PostMapping("/creditAllocation/reverse")
+	public ResponseEntity<BaseDto<CreditAllocationBatchModel>> reverseSettlement(
+			@Valid @RequestBody CreditSettlementActionDTO action, Principal principal) {
+
+		CreditAllocationBatchModel batch = creditAllocationService
+				.reverseSettlement(action, principal.getName());
+
+		String message = action.isReverseAutomatically()
+				? creditAllocationHelper.getReversedMessage()
+				: creditAllocationHelper.getReversalFlaggedMessage();
+
+		return new BaseDto<>(batch, message, OK).respond();
 	}
 
 }

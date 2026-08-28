@@ -64,6 +64,13 @@ public class CreditAllocationBatchModel extends AuditModel {
 	@Column(name = "MASTER_ACCOUNT_ID")
 	private Integer masterAccountId;
 
+	/**
+	 * The account's remaining credit before settling. Reversing by subtracting
+	 * the allocated amount would assume nothing else moved the limit in between.
+	 */
+	@Column(name = "PRIOR_CREDIT_LIMIT_LEFT")
+	private BigDecimal priorCreditLimitLeft;
+
 	@Column(name = "PHARMACY_ID")
 	private Integer pharmacyId;
 
@@ -95,7 +102,7 @@ public class CreditAllocationBatchModel extends AuditModel {
 	@Column(name = "CHEQUE_ID")
 	private Integer chequeId;
 
-	@Column(name = "STATUS", length = 20)
+	@Column(name = "STATUS", length = 30)
 	private String status;
 
 	@Column(name = "OVERPAYMENT_ACTION", length = 20)
@@ -106,6 +113,12 @@ public class CreditAllocationBatchModel extends AuditModel {
 
 	@Column(name = "REVERSAL_REASON", length = 200)
 	private String reversalReason;
+
+	@Column(name = "REVERSED_BY")
+	private Integer reversedBy;
+
+	@Column(name = "REVERSED_DATE")
+	private Date reversedDate;
 
 	@Column(name = "APPROVED_BY")
 	private Integer approvedBy;

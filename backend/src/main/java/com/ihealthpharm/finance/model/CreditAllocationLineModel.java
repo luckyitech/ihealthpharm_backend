@@ -66,8 +66,33 @@ public class CreditAllocationLineModel extends AuditModel {
 	@Column(name = "PRIOR_BALANCE")
 	private BigDecimal priorBalance;
 
+	/** Settlement adds to what was already received, so the original is kept to subtract back. */
+	@Column(name = "PRIOR_AMOUNT_RECEIVED")
+	private BigDecimal priorAmountReceived;
+
+	/** Null and zero mean different things on this column, so the original is kept verbatim. */
+	@Column(name = "PRIOR_PARTIAL_AMT")
+	private BigDecimal priorPartialAmt;
+
 	@Column(name = "PRIOR_PAYMENT_STATUS", length = 20)
 	private String priorPaymentStatus;
+
+	/**
+	 * Approved or Not Approved before settling. Not inferable afterwards - a row
+	 * may already have been Approved, so there is no way to tell what to restore
+	 * unless it is recorded here.
+	 */
+	@Column(name = "PRIOR_STATUS", length = 20)
+	private String priorStatus;
+
+	@Column(name = "PRIOR_PAYMENT_TYPE", length = 20)
+	private String priorPaymentType;
+
+	@Column(name = "PRIOR_APPROVED_BY")
+	private Integer priorApprovedBy;
+
+	@Column(name = "PRIOR_APPROVED_DATE")
+	private LocalDate priorApprovedDate;
 
 	@Column(name = "RESULTING_PAYMENT_STATUS", length = 20)
 	private String resultingPaymentStatus;
