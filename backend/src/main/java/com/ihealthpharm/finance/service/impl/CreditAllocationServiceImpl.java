@@ -5,8 +5,10 @@ import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import javax.transaction.Transactional;
 
@@ -227,8 +229,16 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			// full leaves nothing to receive, while a partial payment leaves the
 			// remainder outstanding and records what was paid in both
 			// amountReceived and partialAmt.
-			receivable.setAmountReceived(line.getAmountApplied().floatValue());
-			receivable.setPartialAmt(settledInFull ? 0f : line.getAmountApplied().floatValue());
+			// Accumulate rather than replace. A row may already carry an earlier
+			// payment - DPSB1705210018 has 1,500 net with 750 received and 750
+			// still owing - and overwriting would lose it, leaving the bill
+			// looking half paid after it had been settled in full.
+			float alreadyReceived = Objects.nonNull(receivable.getAmountReceived())
+					? receivable.getAmountReceived() : 0f;
+			float nowReceived = alreadyReceived + line.getAmountApplied().floatValue();
+
+			receivable.setAmountReceived(nowReceived);
+			receivable.setPartialAmt(settledInFull ? 0f : nowReceived);
 			receivable.setAmountToBeReceived(settledInFull ? 0f
 					: line.getPriorBalance().subtract(line.getAmountApplied()).floatValue());
 			receivable.setPaymentStatus(line.getResultingPaymentStatus());
@@ -252,6 +262,51 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		// this leaves the receivable updated and the accounts unbalanced.
 		generalLedgerService.saveMultipleLedgersDataForAccRecievables(
 				Objects.nonNull(settled) && !settled.isEmpty() ? settled : payload);
+
+		reconcileBills(plan);
+	}
+
+	/**
+	 * Brings each settled bill back in line with its receivables.
+	 *
+	 * The existing update only refreshes the sales bill on some paths - it
+	 * cascades for a partial payment but not for one that clears the bill, so
+	 * settling without this leaves the receivable Paid while the bill still
+	 * shows the full amount owing. That mismatch is the same one that has left
+	 * 615 receivables claiming money on bills carrying no balance.
+	 *
+	 * The figures are derived from the receivables rather than adjusted by the
+	 * amount just applied, so running it twice cannot double count.
+	 */
+	private void reconcileBills(CreditAllocationPlanDTO plan) {
+		Set<String> billCodes = new LinkedHashSet<>();
+		for (CreditAllocationPlanLineDTO line : plan.getLines()) {
+			if (StringUtils.isNotBlank(line.getBillCode())) {
+				billCodes.add(line.getBillCode().trim());
+			}
+		}
+
+		for (String billCode : billCodes) {
+			SalesModel bill = salesRepository.getSalesRecordByNo(billCode);
+			if (!Objects.nonNull(bill) || !Objects.nonNull(bill.getNetAmount())) {
+				continue;
+			}
+
+			BigDecimal received = accountReceivablesRepository.sumReceivedForBill(billCode);
+			BigDecimal netAmount = BigDecimal.valueOf(bill.getNetAmount());
+			BigDecimal balance = netAmount.subtract(Objects.nonNull(received) ? received : BigDecimal.ZERO);
+
+			boolean cleared = balance.signum() <= 0;
+			bill.setPaidAmount(cleared ? bill.getNetAmount() : received.floatValue());
+			bill.setBalanceAmount(cleared ? 0f : balance.floatValue());
+			bill.setCreditAmount(cleared ? 0d : balance.doubleValue());
+			bill.setPaymentStatus(cleared ? CreditAllocationEngine.STATUS_PAID
+					: CreditAllocationEngine.STATUS_PARTIALLY_PAID);
+
+			salesRepository.save(bill);
+			log.info("Bill {} reconciled: received {} of {}, balance {} -> {}", billCode, received,
+					netAmount, balance.max(BigDecimal.ZERO), bill.getPaymentStatus());
+		}
 	}
 
 	/**

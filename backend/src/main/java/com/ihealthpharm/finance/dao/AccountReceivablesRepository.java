@@ -1,5 +1,6 @@
 package com.ihealthpharm.finance.dao;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -20,6 +21,19 @@ import com.ihealthpharm.sales.model.SalesModel;
 public interface AccountReceivablesRepository extends JpaRepository<AccountReceivablesModel,Integer>
 {
 	List<AccountReceivablesModel> findAll();
+
+	/**
+	 * Total received against a bill across its Sales Billing receivables.
+	 *
+	 * Used to rebuild the bill's balance from the receivables rather than
+	 * adjusting it by the amount just applied, so the figure cannot drift or
+	 * be counted twice.
+	 */
+	@Query(nativeQuery = true, value =
+		"SELECT COALESCE(SUM(ar.AMOUNT_RECEIVED),0) FROM account_receivables ar "
+		+ "WHERE ar.BILL_NO = :billCode AND ar.SOURCE_TYPE = 'Sales Billing' "
+		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' AND ar.PAYMENT_STATUS <> 'Cancel'")
+	BigDecimal sumReceivedForBill(@Param("billCode") String billCode);
 	List<AccountReceivablesModel> findAllByOrderByLastUpdateTimestampDesc();
 	 
 	@Query("select i from sales i inner join customer c on i.customerModel.customerId=c.customerId where i.customerModel.customerId=:customerId")
