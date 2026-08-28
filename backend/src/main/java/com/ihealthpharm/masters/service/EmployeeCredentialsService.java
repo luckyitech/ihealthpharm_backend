@@ -36,4 +36,14 @@ public interface EmployeeCredentialsService {
 	 * encryption was introduced. No-op once the row already holds a BCrypt hash.
 	 */
 	void upgradeLegacyPasswordIfNeeded(EmployeeCredentialsModel employeeCredentialsModel, String rawPassword);
+
+	/**
+	 * Checks an approval PIN for the signed-in user.
+	 *
+	 * Accepts the plaintext PINs that predate encryption and re-hashes them on
+	 * first correct use, the same way passwords were migrated. Raises rather
+	 * than returning false when the PIN is wrong or absent, so a caller cannot
+	 * proceed by ignoring the result.
+	 */
+	void verifyApprovalPin(String userName, String rawPin);
 }

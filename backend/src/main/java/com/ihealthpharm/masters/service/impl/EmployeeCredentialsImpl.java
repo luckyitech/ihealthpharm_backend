@@ -160,6 +160,35 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 	}
 
 	@Override
+	public void verifyApprovalPin(String userName, String rawPin) {
+		if (rawPin == null || rawPin.trim().isEmpty()) {
+			throw new IHealthPharmException("Approval PIN is required.", HttpStatus.UNAUTHORIZED);
+		}
+
+		EmployeeCredentialsModel credentials = findEmployeeCredentialsByUserName(userName);
+		String storedPin = credentials.getApprovalAccessPin();
+
+		if (storedPin == null || storedPin.trim().isEmpty()) {
+			throw new IHealthPharmException(
+					"No approval PIN is set for this user. Ask an administrator to set one.",
+					HttpStatus.FORBIDDEN);
+		}
+
+		if (!passwordEncoder.matches(rawPin, storedPin)) {
+			log.warn("Approval PIN rejected for user {}", userName);
+			throw new IHealthPharmException("Approval PIN is incorrect.", HttpStatus.UNAUTHORIZED);
+		}
+
+		// Correct PIN, still stored in the clear - hash it now, as passwords are.
+		if (!LegacyAwarePasswordEncoder.isBCryptHash(storedPin)) {
+			credentials.setApprovalAccessPin(passwordEncoder.encode(rawPin));
+			employeeCredentialsRepository.save(credentials);
+			log.info("Migrated legacy plaintext approval PIN to BCrypt for employee credentials ID:"
+					+ credentials.getEmployeeCredentialsId());
+		}
+	}
+
+	@Override
 	public void upgradeLegacyPasswordIfNeeded(EmployeeCredentialsModel employeeCredentialsModel, String rawPassword) {
 		if (LegacyAwarePasswordEncoder.isBCryptHash(employeeCredentialsModel.getCurrentPassword())) {
 			return;
