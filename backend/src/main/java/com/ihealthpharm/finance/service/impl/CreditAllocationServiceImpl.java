@@ -266,6 +266,10 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			receivable.setPaymentType(line.getPriorPaymentType());
 			receivable.setApprovedBy(line.getPriorApprovedBy());
 			receivable.setApprovedDate(line.getPriorApprovedDate());
+			receivable.setChequeNumber(line.getPriorChequeNumber());
+			receivable.setChequeAmount(Objects.nonNull(line.getPriorChequeAmt())
+					? line.getPriorChequeAmt().doubleValue() : null);
+			receivable.setChequeDate(line.getPriorChequeDt());
 			accountReceivablesRepository.save(receivable);
 
 			CreditAllocationPlanLineDTO planLine = new CreditAllocationPlanLineDTO();
@@ -276,9 +280,36 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			creditAllocationLineRepository.save(line);
 		}
 
+		restoreBillChequeDetails(lines);
+
 		// Rebuild the bills from the receivables just restored.
 		reconcileBills(restored);
 		restoreCreditLimit(batch);
+	}
+
+	/**
+	 * Puts back the cheque details settlement appended to each sales bill.
+	 *
+	 * The receivables update adds the cheque number to a comma separated list
+	 * and adds to the bill's cheque amount, so without this a reversed cheque
+	 * stays listed against the bill and its amount is counted twice.
+	 */
+	private void restoreBillChequeDetails(List<CreditAllocationLineModel> lines) {
+		Set<Integer> done = new LinkedHashSet<>();
+		for (CreditAllocationLineModel line : lines) {
+			if (!Objects.nonNull(line.getSalesBillId()) || !done.add(line.getSalesBillId())) {
+				continue;
+			}
+			SalesModel bill = salesRepository.findById(line.getSalesBillId()).orElse(null);
+			if (!Objects.nonNull(bill)) {
+				continue;
+			}
+			Double priorBillCheque = Objects.nonNull(line.getPriorBillChequeAmt())
+					? Double.valueOf(line.getPriorBillChequeAmt().doubleValue()) : null;
+			bill.setChequeNumber(line.getPriorBillChequeNumber());
+			bill.setChequeAmount(priorBillCheque);
+			salesRepository.save(bill);
+		}
 	}
 
 	private void restoreCreditLimit(CreditAllocationBatchModel batch) {
@@ -344,8 +375,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		request.setPaymentType(batch.getPaymentType());
 		request.setPaymentRef(batch.getPaymentRef());
 		request.setApprovedBy(batch.getApprovedBy());
-		request.setChequeDate(Objects.nonNull(batch.getApprovedDate())
-				? new java.sql.Date(batch.getApprovedDate().getTime()).toLocalDate() : LocalDate.now());
+		request.setChequeDate(batch.getChequeDate());
 		return request;
 	}
 
@@ -389,6 +419,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		batch.setPaymentType(request.getPaymentType());
 		batch.setPaymentRef(request.getPaymentRef());
 		batch.setChequeId(request.getChequeId());
+		batch.setChequeDate(request.getChequeDate());
 		batch.setOverpaymentAction(request.getOverpaymentAction());
 		batch.setApprovedBy(request.getApprovedBy());
 		batch.setApprovedDate(new Date());
@@ -528,6 +559,18 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			line.setPriorPaymentType(receivable.getPaymentType());
 			line.setPriorApprovedBy(receivable.getApprovedBy());
 			line.setPriorApprovedDate(receivable.getApprovedDate());
+			line.setPriorChequeNumber(receivable.getChequeNumber());
+			line.setPriorChequeAmt(Objects.nonNull(receivable.getChequeAmount())
+					? BigDecimal.valueOf(receivable.getChequeAmount()) : null);
+			line.setPriorChequeDt(receivable.getChequeDate());
+
+			SalesModel priorBill = Objects.nonNull(planLine.getSalesBillId())
+					? salesRepository.findById(planLine.getSalesBillId()).orElse(null) : null;
+			if (Objects.nonNull(priorBill)) {
+				line.setPriorBillChequeNumber(priorBill.getChequeNumber());
+				line.setPriorBillChequeAmt(Objects.nonNull(priorBill.getChequeAmount())
+						? BigDecimal.valueOf(priorBill.getChequeAmount()) : null);
+			}
 			creditAllocationLineRepository.save(line);
 			return;
 		}

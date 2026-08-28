@@ -1,6 +1,7 @@
 package com.ihealthpharm.finance.model;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.Date;
 import java.util.List;
 
@@ -101,6 +102,10 @@ public class CreditAllocationBatchModel extends AuditModel {
 
 	@Column(name = "CHEQUE_ID")
 	private Integer chequeId;
+
+	/** Date on the cheque, kept so approval settles with the real one. */
+	@Column(name = "CHEQUE_DATE")
+	private LocalDate chequeDate;
 
 	@Column(name = "STATUS", length = 30)
 	private String status;

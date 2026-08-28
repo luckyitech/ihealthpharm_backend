@@ -94,6 +94,23 @@ public class CreditAllocationLineModel extends AuditModel {
 	@Column(name = "PRIOR_APPROVED_DATE")
 	private LocalDate priorApprovedDate;
 
+	/** Settling by cheque overwrites these, so the originals are kept to restore. */
+	@Column(name = "PRIOR_CHEQUE_NUMBER", length = 30)
+	private String priorChequeNumber;
+
+	@Column(name = "PRIOR_CHEQUE_AMT")
+	private BigDecimal priorChequeAmt;
+
+	@Column(name = "PRIOR_CHEQUE_DT")
+	private LocalDate priorChequeDt;
+
+	/** The sales bill's cheque details before this batch appended to them. */
+	@Column(name = "PRIOR_BILL_CHEQUE_NUMBER", length = 50)
+	private String priorBillChequeNumber;
+
+	@Column(name = "PRIOR_BILL_CHEQUE_AMT")
+	private BigDecimal priorBillChequeAmt;
+
 	@Column(name = "RESULTING_PAYMENT_STATUS", length = 20)
 	private String resultingPaymentStatus;
 
