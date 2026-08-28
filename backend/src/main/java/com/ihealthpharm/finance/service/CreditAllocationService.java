@@ -19,4 +19,19 @@ public interface CreditAllocationService {
 	 */
 	CreditAllocationPlanDTO previewAllocation(CreditAllocationRequestDTO request);
 
+	/**
+	 * Settles the bills the plan names, and records the batch so it can be
+	 * reversed.
+	 *
+	 * The settlement itself is handed to the existing receivables update, so a
+	 * bill cleared here goes through exactly the same path - sales bill status,
+	 * credit limit, ledger - as one Vinod ticks by hand.
+	 *
+	 * Requires the caller's approval PIN. A cheque payment is recorded but not
+	 * settled: its batch is held until the cheque is approved.
+	 *
+	 * @param userName the signed-in user, whose PIN is checked
+	 */
+	CreditAllocationPlanDTO applyAllocation(CreditAllocationRequestDTO request, String userName);
+
 }

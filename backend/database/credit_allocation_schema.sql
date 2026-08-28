@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS `credit_allocation_batch` (
   `BATCH_REF`             varchar(30)     NOT NULL COMMENT 'Human readable ref, e.g. DPCA2808260001',
 
   `CUSTOMER_ID`           int             DEFAULT NULL,
-  `MASTER_ACCOUNT_ID`     int             DEFAULT NULL COMMENT 'Set when paid against a credit account rather than a single customer',
+  `MASTER_ACCOUNT_NO`     varchar(45)     DEFAULT NULL COMMENT 'Credit account code, e.g. DPCR2109200005 - how account_receivables identifies the account',
+  `MASTER_ACCOUNT_ID`     int             DEFAULT NULL COMMENT 'Numeric id of the same account, where known',
   `PHARMACY_ID`           int             DEFAULT NULL,
 
   `PAYMENT_AMOUNT`        decimal(15,2)   NOT NULL COMMENT 'What the customer handed over',
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS `credit_allocation_batch` (
   UNIQUE KEY `UK_CREDIT_ALLOC_BATCH_REF` (`BATCH_REF`),
   KEY `IDX_CREDIT_ALLOC_BATCH_CUSTOMER` (`CUSTOMER_ID`),
   KEY `IDX_CREDIT_ALLOC_BATCH_MASTER_ACC` (`MASTER_ACCOUNT_ID`),
+  KEY `IDX_CREDIT_ALLOC_BATCH_MASTER_ACC_NO` (`MASTER_ACCOUNT_NO`),
   KEY `IDX_CREDIT_ALLOC_BATCH_STATUS` (`STATUS`),
   KEY `IDX_CREDIT_ALLOC_BATCH_CHEQUE` (`CHEQUE_ID`),
   KEY `IDX_CREDIT_ALLOC_BATCH_CREATED` (`CREATION_TS`)

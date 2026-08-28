@@ -57,6 +57,10 @@ public class CreditAllocationBatchModel extends AuditModel {
 	@Column(name = "CUSTOMER_ID")
 	private Integer customerId;
 
+	/** Credit account code, as account_receivables identifies it (e.g. DPCR2109200005). */
+	@Column(name = "MASTER_ACCOUNT_NO", length = 45)
+	private String masterAccountNo;
+
 	@Column(name = "MASTER_ACCOUNT_ID")
 	private Integer masterAccountId;
 

@@ -2,6 +2,7 @@ package com.ihealthpharm.finance.controller;
 
 import static org.springframework.http.HttpStatus.OK;
 
+import java.security.Principal;
 import java.util.List;
 
 import javax.validation.Valid;
@@ -68,6 +69,25 @@ public class CreditAllocationController {
 		String message = plan.isOrderConfirmationRequired()
 				? creditAllocationHelper.getOrderConfirmationMessage()
 				: creditAllocationHelper.getPreviewMessage();
+
+		return new BaseDto<>(plan, message, OK).respond();
+	}
+
+	/**
+	 * Settles the bills and records the batch.
+	 *
+	 * The signed-in user is taken from the authenticated principal rather than
+	 * the request body, so a caller cannot settle under someone else's PIN.
+	 */
+	@PostMapping("/creditAllocation/apply")
+	public ResponseEntity<BaseDto<CreditAllocationPlanDTO>> applyAllocation(
+			@Valid @RequestBody CreditAllocationRequestDTO request, Principal principal) {
+
+		CreditAllocationPlanDTO plan = creditAllocationService.applyAllocation(request, principal.getName());
+
+		String message = plan.isOrderConfirmationRequired()
+				? creditAllocationHelper.getOrderConfirmationMessage()
+				: creditAllocationHelper.getAppliedMessage();
 
 		return new BaseDto<>(plan, message, OK).respond();
 	}

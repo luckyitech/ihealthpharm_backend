@@ -54,4 +54,12 @@ public class CreditAllocationRequestDTO implements Serializable {
 	/** 'Y' when loading a historical payment from the EOD records. */
 	private boolean backfill;
 
+	/** Approval PIN of the user settling the payment. Required to apply, ignored on preview. */
+	private String approvalPin;
+
+	/** Employee recorded as approving the settlement. */
+	private Integer approvedBy;
+
+	private String receiptNumber;
+
 }

@@ -18,4 +18,7 @@ public class CreditAllocationHelper {
 	@Value("${creditAllocation.orderConfirmation.response}")
 	public String orderConfirmationMessage;
 
+	@Value("${creditAllocation.applied.response}")
+	public String appliedMessage;
+
 }
