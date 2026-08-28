@@ -308,6 +308,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 					? Double.valueOf(line.getPriorBillChequeAmt().doubleValue()) : null;
 			bill.setChequeNumber(line.getPriorBillChequeNumber());
 			bill.setChequeAmount(priorBillCheque);
+			bill.setChequeDate(line.getPriorBillChequeDate());
 			salesRepository.save(bill);
 		}
 	}
@@ -570,6 +571,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				line.setPriorBillChequeNumber(priorBill.getChequeNumber());
 				line.setPriorBillChequeAmt(Objects.nonNull(priorBill.getChequeAmount())
 						? BigDecimal.valueOf(priorBill.getChequeAmount()) : null);
+				line.setPriorBillChequeDate(priorBill.getChequeDate());
 			}
 			creditAllocationLineRepository.save(line);
 			return;

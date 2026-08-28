@@ -111,6 +111,9 @@ public class CreditAllocationLineModel extends AuditModel {
 	@Column(name = "PRIOR_BILL_CHEQUE_AMT")
 	private BigDecimal priorBillChequeAmt;
 
+	@Column(name = "PRIOR_BILL_CHEQUE_DATE", length = 30)
+	private String priorBillChequeDate;
+
 	@Column(name = "RESULTING_PAYMENT_STATUS", length = 20)
 	private String resultingPaymentStatus;
 

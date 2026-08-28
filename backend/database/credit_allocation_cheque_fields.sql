@@ -30,3 +30,8 @@ ALTER TABLE `credit_allocation_line`
 ALTER TABLE `credit_allocation_line`
   ADD COLUMN `PRIOR_BILL_CHEQUE_NUMBER` varchar(50)   DEFAULT NULL AFTER `PRIOR_CHEQUE_DT`,
   ADD COLUMN `PRIOR_BILL_CHEQUE_AMT`    decimal(15,2) DEFAULT NULL AFTER `PRIOR_BILL_CHEQUE_NUMBER`;
+
+-- The bill's cheque date is overwritten too, and was the one field the
+-- column-by-column verification missed until the whole row was compared.
+ALTER TABLE `credit_allocation_line`
+  ADD COLUMN `PRIOR_BILL_CHEQUE_DATE` varchar(30) DEFAULT NULL AFTER `PRIOR_BILL_CHEQUE_AMT`;
