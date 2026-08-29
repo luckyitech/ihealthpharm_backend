@@ -61,6 +61,15 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	/** A bill with nothing received against it. */
 	private static final String STATUS_PENDING = "Pending";
 
+	/**
+	 * Carried by a receivable holding money the customer has not used yet.
+	 *
+	 * The system already records this as a negative AMOUNT_TO_BE_RECEIVED - 472
+	 * receivables sit that way, holding about 3.3m between them - so credit left
+	 * on account follows the same convention rather than a new one.
+	 */
+	private static final String STATUS_OVER_PAID = "Over Paid";
+
 	private static final String PAYMENT_TYPE_CHEQUE = "Cheque";
 
 	@Autowired
@@ -528,6 +537,8 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			payload.add(receivable);
 		}
 
+		holdRemainderOnAccount(request, plan, payload);
+
 		List<AccountReceivablesModel> settled = accountReceivablesService
 				.updateAccountsReceivablesData(payload);
 
@@ -580,6 +591,44 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	private BigDecimal toBigDecimal(Float value) {
 		return Objects.nonNull(value) ? BigDecimal.valueOf(value) : null;
+	}
+
+	/**
+	 * Leaves money the customer overpaid sitting on their account.
+	 *
+	 * Recorded the way the system already records it: the last bill settled
+	 * carries the extra in AMOUNT_RECEIVED and shows a negative
+	 * AMOUNT_TO_BE_RECEIVED, meaning the customer is in credit by that much.
+	 * The next payment run picks it up as an ordinary open item.
+	 *
+	 * A refund is deliberately not applied here. Nothing in the system pays
+	 * money back out, so inventing a mechanism would leave a payment recorded
+	 * against bills that never received it. The decision is kept on the batch
+	 * and the money stays unallocated for whoever pays it out.
+	 */
+	private void holdRemainderOnAccount(CreditAllocationRequestDTO request, CreditAllocationPlanDTO plan,
+			List<AccountReceivablesModel> payload) {
+
+		if (plan.getUnallocatedAmount().signum() <= 0 || payload.isEmpty()) {
+			return;
+		}
+		if (!CreditAllocationBatchModel.OVERPAYMENT_HOLD_ON_ACCOUNT
+				.equalsIgnoreCase(request.getOverpaymentAction())) {
+			log.info("Overpayment of {} left unallocated for refund", plan.getUnallocatedAmount());
+			return;
+		}
+
+		BigDecimal remainder = plan.getUnallocatedAmount();
+		AccountReceivablesModel lastSettled = payload.get(payload.size() - 1);
+
+		float received = Objects.nonNull(lastSettled.getAmountReceived())
+				? lastSettled.getAmountReceived() : 0f;
+
+		lastSettled.setAmountReceived(received + remainder.floatValue());
+		lastSettled.setAmountToBeReceived(remainder.negate().floatValue());
+		lastSettled.setPaymentStatus(STATUS_OVER_PAID);
+
+		log.info("Overpayment of {} held on account against {}", remainder, lastSettled.getBillRefNo());
 	}
 
 	/**
