@@ -34,4 +34,14 @@ public class CreditAllocationPlanLineDTO implements Serializable {
 	/** "Paid" when the bill is cleared, "Partially Paid" when the money ran out on it. */
 	private String resultingPaymentStatus;
 
+	/**
+	 * What the bill still owes once this payment is applied.
+	 *
+	 * Worked out here rather than left to the screen to subtract. The engine is
+	 * the one place money arithmetic happens - it holds every figure to whole
+	 * cents - and a browser subtracting 5,997.00 from 11,111.00 in floating
+	 * point can render 5,113.999999999.
+	 */
+	private BigDecimal resultingBalance;
+
 }

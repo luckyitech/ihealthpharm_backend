@@ -281,4 +281,36 @@ public class CreditAllocationEngineTest {
 		assertTrue(plan.getLines().isEmpty());
 	}
 
+
+	/**
+	 * The screen shows what each bill still owes after the payment. That figure
+	 * is worked out here rather than subtracted in the browser, so it has to
+	 * agree with the other two columns on every line and reach zero on a bill
+	 * that is cleared.
+	 */
+	@Test
+	public void everyLineReportsWhatTheBillStillOwes() {
+		// 40,143 clears the first three of Dr Roop's bills and part-pays the fourth.
+		CreditAllocationPlanDTO plan = engine.buildPlan(drRoopsOpenBills(), new BigDecimal("40143"),
+				"OLDEST", true, TODAY);
+
+		assertFalse(plan.getLines().isEmpty());
+
+		for (CreditAllocationPlanLineDTO line : plan.getLines()) {
+			assertEquals("before minus applied must equal after", 0,
+					line.getPriorBalance().subtract(line.getAmountApplied())
+							.compareTo(line.getResultingBalance()));
+			assertEquals("held to whole cents like every other amount", 2,
+					line.getResultingBalance().scale());
+
+			if (CreditAllocationEngine.STATUS_PAID.equals(line.getResultingPaymentStatus())) {
+				assertEquals("a bill reported Paid must owe nothing", 0,
+						line.getResultingBalance().signum());
+			} else {
+				assertTrue("a bill left partly paid must still owe something",
+						line.getResultingBalance().signum() > 0);
+			}
+		}
+	}
+
 }

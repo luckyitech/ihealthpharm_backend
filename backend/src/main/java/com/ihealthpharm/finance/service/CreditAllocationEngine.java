@@ -132,6 +132,7 @@ public class CreditAllocationEngine {
 			line.setAmountApplied(applied);
 			line.setPriorBalance(outstanding);
 			line.setPriorPaymentStatus(bill.getCurrentPaymentStatus());
+			line.setResultingBalance(outstanding.subtract(applied));
 			line.setResultingPaymentStatus(
 					applied.compareTo(outstanding) == 0 ? STATUS_PAID : STATUS_PARTIALLY_PAID);
 

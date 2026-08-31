@@ -480,6 +480,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			planLine.setBillDate(line.getBillDate());
 			planLine.setAmountApplied(line.getAmountApplied());
 			planLine.setPriorBalance(line.getPriorBalance());
+			if (Objects.nonNull(line.getPriorBalance()) && Objects.nonNull(line.getAmountApplied())) {
+				planLine.setResultingBalance(line.getPriorBalance().subtract(line.getAmountApplied()));
+			}
 			planLine.setPriorPaymentStatus(line.getPriorPaymentStatus());
 			planLine.setResultingPaymentStatus(line.getResultingPaymentStatus());
 			plan.getLines().add(planLine);
