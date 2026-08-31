@@ -355,7 +355,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 		// Rebuild the bills from the receivables just restored.
 		reconcileBills(restored);
-		restoreCreditLimit(batch);
+		unwindCreditLimit(batch);
 	}
 
 	/**
@@ -395,22 +395,59 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		}
 	}
 
-	private void restoreCreditLimit(CreditAllocationBatchModel batch) {
-		if (!Objects.nonNull(batch.getPriorCreditLimitLeft())
-				|| StringUtils.isBlank(batch.getMasterAccountNo())) {
+	/** The credit a settlement freed: what the limit gained across the update. */
+	private BigDecimal creditReleased(BigDecimal before, BigDecimal after) {
+		return Objects.nonNull(before) && Objects.nonNull(after) ? after.subtract(before) : null;
+	}
+
+	/**
+	 * Takes back the credit the settlement freed.
+	 *
+	 * Subtracted from whatever the limit is now, rather than restoring the
+	 * figure recorded when the settlement was applied. Every other path that
+	 * moves this column adjusts by a delta, and for good reason: the customer
+	 * may have bought on credit in between. Restoring 22,886 over a limit of
+	 * 47,886 that had since absorbed a 5,000 credit sale handed that 5,000 back
+	 * as available credit and left the account free to overdraw by it.
+	 *
+	 * A batch settled before CREDIT_LIMIT_RELEASED existed has nothing measured
+	 * to subtract, so it still reverses the old way. That is the behaviour it
+	 * was written under, and guessing a delta for it would be worse.
+	 */
+	private void unwindCreditLimit(CreditAllocationBatchModel batch) {
+		if (StringUtils.isBlank(batch.getMasterAccountNo())) {
 			return;
 		}
 
 		MasterAccountModel account = masterAccountRepository
-				.getDataByMasterCreditNumber(batch.getMasterAccountNo());
+				.getDataByMasterCreditNumber(batch.getMasterAccountNo().trim());
 		if (!Objects.nonNull(account)) {
 			return;
 		}
 
-		account.setCreditLimitLeft(batch.getPriorCreditLimitLeft().intValue());
+		if (!Objects.nonNull(batch.getCreditLimitReleased())) {
+			if (!Objects.nonNull(batch.getPriorCreditLimitLeft())) {
+				return;
+			}
+			account.setCreditLimitLeft(batch.getPriorCreditLimitLeft().intValue());
+			masterAccountRepository.save(account);
+			log.warn("Settlement {} predates the measured credit release; restoring {} for {}",
+					batch.getBatchRef(), batch.getPriorCreditLimitLeft(), batch.getMasterAccountNo());
+			return;
+		}
+
+		if (batch.getCreditLimitReleased().signum() == 0
+				|| !Objects.nonNull(account.getCreditLimitLeft())) {
+			// Settling this one freed no credit, so reversing it takes none back.
+			return;
+		}
+
+		BigDecimal adjusted = BigDecimal.valueOf(account.getCreditLimitLeft())
+				.subtract(batch.getCreditLimitReleased());
+		account.setCreditLimitLeft(adjusted.intValue());
 		masterAccountRepository.save(account);
-		log.info("Credit limit for {} restored to {}", batch.getMasterAccountNo(),
-				batch.getPriorCreditLimitLeft());
+		log.info("Credit limit for {} reduced by {} to {} on reversing {}", batch.getMasterAccountNo(),
+				batch.getCreditLimitReleased(), adjusted, batch.getBatchRef());
 	}
 
 	private CreditAllocationBatchModel requireBatch(String batchRef) {
@@ -657,7 +694,17 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 		BigDecimal heldOnAccount = holdRemainderOnAccount(request, plan, payload);
 
+		// Measured, not assumed. The receivables update frees credit back onto
+		// the account, usually by the amount allocated but not always - a
+		// receivable naming its bill only in SOURCE_REF never reaches the
+		// account and releases nothing. Reversal subtracts whatever this turns
+		// out to be.
+		BigDecimal limitBefore = currentCreditLimitLeft(request.getMasterAccountNo());
+
 		accountReceivablesService.updateAccountsReceivablesData(payload);
+
+		batch.setCreditLimitReleased(creditReleased(limitBefore,
+				currentCreditLimitLeft(request.getMasterAccountNo())));
 
 		// The Receipts screen makes two calls, not one: after saving the
 		// receivables it posts the ledger entries separately. Settling without

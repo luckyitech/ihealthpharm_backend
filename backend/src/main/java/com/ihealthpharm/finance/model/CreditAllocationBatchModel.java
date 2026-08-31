@@ -72,6 +72,17 @@ public class CreditAllocationBatchModel extends AuditModel {
 	@Column(name = "PRIOR_CREDIT_LIMIT_LEFT")
 	private BigDecimal priorCreditLimitLeft;
 
+	/**
+	 * How much credit settling actually freed, measured across the receivables
+	 * update rather than assumed from the allocated amount.
+	 *
+	 * Usually the two match, but not always: a receivable naming its bill only
+	 * in SOURCE_REF never reaches the account, so settling it releases nothing.
+	 * Reversing subtracts this, so the limit moves by what it really moved by.
+	 */
+	@Column(name = "CREDIT_LIMIT_RELEASED")
+	private BigDecimal creditLimitReleased;
+
 	@Column(name = "PHARMACY_ID")
 	private Integer pharmacyId;
 
