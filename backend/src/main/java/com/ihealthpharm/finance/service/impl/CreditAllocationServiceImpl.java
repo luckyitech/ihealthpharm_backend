@@ -635,6 +635,15 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		List<AccountReceivablesModel> payload = new ArrayList<>();
 		Map<String, BigDecimal> appliedPerBill = new HashMap<>();
 
+		// Loaded once and indexed, rather than re-read inside the loop. Every
+		// line used to reload the whole batch to find its own row, so a 59-bill
+		// settlement read 59 lines 59 times over.
+		Map<Integer, CreditAllocationLineModel> linesBySequence = new HashMap<>();
+		for (CreditAllocationLineModel line : creditAllocationLineRepository
+				.findByAllocationBatchAllocationBatchIdOrderBySequenceNoAsc(batch.getAllocationBatchId())) {
+			linesBySequence.put(line.getSequenceNo(), line);
+		}
+
 		for (CreditAllocationPlanLineDTO line : plan.getLines()) {
 			AccountReceivablesModel receivable = accountReceivablesRepository
 					.findById(line.getAccountReceivablesId())
@@ -663,7 +672,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			// Reversal restores these verbatim rather than inferring them - STATUS
 			// in particular cannot be worked out afterwards, since a row may
 			// already have been Approved.
-			recordPriorState(batch, line, receivable);
+			recordPriorState(linesBySequence.get(line.getSequenceNo()), line, receivable);
 
 			receivable.setAmountReceived(nowReceived);
 			receivable.setPartialAmt(settledInFull ? 0f : nowReceived);
@@ -754,41 +763,43 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	 * Copies a receivable's current values onto its allocation line, so a
 	 * reversal can put them back exactly as they were.
 	 */
-	private void recordPriorState(CreditAllocationBatchModel batch, CreditAllocationPlanLineDTO planLine,
+	private void recordPriorState(CreditAllocationLineModel line, CreditAllocationPlanLineDTO planLine,
 			AccountReceivablesModel receivable) {
 
-		List<CreditAllocationLineModel> lines = creditAllocationLineRepository
-				.findByAllocationBatchAllocationBatchIdOrderBySequenceNoAsc(batch.getAllocationBatchId());
-
-		for (CreditAllocationLineModel line : lines) {
-			if (!planLine.getSequenceNo().equals(line.getSequenceNo())) {
-				continue;
-			}
-			line.setPriorAmountReceived(toBigDecimal(receivable.getAmountReceived()));
-			line.setPriorPartialAmt(toBigDecimal(receivable.getPartialAmt()));
-			line.setPriorStatus(receivable.getStatus());
-			line.setPriorPaymentType(receivable.getPaymentType());
-			line.setPriorApprovedBy(receivable.getApprovedBy());
-			line.setPriorApprovedDate(receivable.getApprovedDate());
-			line.setPriorChequeNumber(receivable.getChequeNumber());
-			line.setPriorChequeAmt(Objects.nonNull(receivable.getChequeAmount())
-					? BigDecimal.valueOf(receivable.getChequeAmount()) : null);
-			line.setPriorChequeDt(receivable.getChequeDate());
-
-			SalesModel priorBill = Objects.nonNull(planLine.getSalesBillId())
-					? salesRepository.findById(planLine.getSalesBillId()).orElse(null) : null;
-			if (Objects.nonNull(priorBill)) {
-				line.setPriorBillChequeNumber(priorBill.getChequeNumber());
-				line.setPriorBillChequeAmt(Objects.nonNull(priorBill.getChequeAmount())
-						? BigDecimal.valueOf(priorBill.getChequeAmount()) : null);
-				line.setPriorBillChequeDate(priorBill.getChequeDate());
-				line.setPriorBillCashAmount(toBigDecimal(priorBill.getCashAmount()));
-				line.setPriorBillCreditAmount(Objects.nonNull(priorBill.getCreditAmount())
-						? BigDecimal.valueOf(priorBill.getCreditAmount()) : null);
-			}
-			creditAllocationLineRepository.save(line);
-			return;
+		if (!Objects.nonNull(line)) {
+			// The lines were written from this same plan a moment ago, so a
+			// missing one means they disagree. Stopping is better than settling
+			// a bill whose prior state nothing recorded, because that is the row
+			// a reversal would have no way to put back.
+			throw new IHealthPharmException(
+					"Settlement line " + planLine.getSequenceNo() + " is missing, so "
+					+ planLine.getBillCode() + " cannot be settled reversibly.",
+					HttpStatus.INTERNAL_SERVER_ERROR);
 		}
+
+		line.setPriorAmountReceived(toBigDecimal(receivable.getAmountReceived()));
+		line.setPriorPartialAmt(toBigDecimal(receivable.getPartialAmt()));
+		line.setPriorStatus(receivable.getStatus());
+		line.setPriorPaymentType(receivable.getPaymentType());
+		line.setPriorApprovedBy(receivable.getApprovedBy());
+		line.setPriorApprovedDate(receivable.getApprovedDate());
+		line.setPriorChequeNumber(receivable.getChequeNumber());
+		line.setPriorChequeAmt(Objects.nonNull(receivable.getChequeAmount())
+				? BigDecimal.valueOf(receivable.getChequeAmount()) : null);
+		line.setPriorChequeDt(receivable.getChequeDate());
+
+		SalesModel priorBill = Objects.nonNull(planLine.getSalesBillId())
+				? salesRepository.findById(planLine.getSalesBillId()).orElse(null) : null;
+		if (Objects.nonNull(priorBill)) {
+			line.setPriorBillChequeNumber(priorBill.getChequeNumber());
+			line.setPriorBillChequeAmt(Objects.nonNull(priorBill.getChequeAmount())
+					? BigDecimal.valueOf(priorBill.getChequeAmount()) : null);
+			line.setPriorBillChequeDate(priorBill.getChequeDate());
+			line.setPriorBillCashAmount(toBigDecimal(priorBill.getCashAmount()));
+			line.setPriorBillCreditAmount(Objects.nonNull(priorBill.getCreditAmount())
+					? BigDecimal.valueOf(priorBill.getCreditAmount()) : null);
+		}
+		creditAllocationLineRepository.save(line);
 	}
 
 	private BigDecimal toBigDecimal(Float value) {
