@@ -47,6 +47,7 @@ import com.ihealthpharm.masters.model.MasterAccountModel;
 import com.ihealthpharm.masters.service.EmployeeCredentialsService;
 import com.ihealthpharm.sales.dao.SalesRepository;
 import com.ihealthpharm.sales.model.SalesModel;
+import com.ihealthpharm.uniquecode.dao.UniqueCodeRepository;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -80,6 +81,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	private static final String PAYMENT_TYPE_CHEQUE = "Cheque";
 
+	/** Counter name in generateuniquecode, alongside SB, AR, GL and the rest. */
+	private static final String BATCH_REF_SEQUENCE = "CA";
+
 	@Autowired
 	OpenBillRepository openBillRepository;
 
@@ -112,6 +116,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Autowired
 	MasterAccountRepository masterAccountRepository;
+
+	@Autowired
+	UniqueCodeRepository uniqueCodeRepository;
 
 	@Override
 	public CreditSettlementAccessDTO getAccess(String userName) {
@@ -896,11 +903,40 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				? salesRepository.getSalesRecordByNo(line.getBillCode().trim()) : null;
 	}
 
-	/** Batch reference in the house style: DPCA + ddMMyy + a daily sequence. */
+	/**
+	 * Batch reference in the house style: DPCA + ddMMyy + a running number.
+	 *
+	 * The number comes from the shared document counter, moved on by a single
+	 * atomic UPDATE. It used to be COUNT(*) + 1 over the day's existing
+	 * references, which two people settling at the same moment both read
+	 * identically - BATCH_REF is UNIQUE, so the second settlement died on a raw
+	 * constraint violation rather than taking the next number.
+	 *
+	 * Deliberately not UniqueCodeService.findByUniqueCodeName: that reads, adds
+	 * one and saves, with no transaction, no lock and no @Version, so it has the
+	 * very race being fixed here. Only the counter row is shared with it.
+	 *
+	 * Like every other code in that table the number runs on rather than
+	 * resetting daily, so the date says when and the number says which. The
+	 * increment shares this method's transaction, so a settlement that is
+	 * refused puts its number back rather than burning it - verified by
+	 * refusing one and watching the counter hold.
+	 */
 	private String nextBatchRef() {
-		String prefix = "DPCA" + new SimpleDateFormat("ddMMyy").format(new Date());
-		long todayCount = creditAllocationBatchRepository.countByBatchRefStartingWith(prefix);
-		return String.format("%s%04d", prefix, todayCount + 1);
+		if (uniqueCodeRepository.incrementUniqueCodeNumber(BATCH_REF_SEQUENCE) == 0) {
+			throw new IHealthPharmException(
+					"The credit settlement numbering row is missing. Run "
+					+ "credit_allocation_batch_ref_sequence.sql before settling.",
+					HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+
+		Integer sequence = uniqueCodeRepository.findUniqueCodeNumber(BATCH_REF_SEQUENCE);
+		if (!Objects.nonNull(sequence)) {
+			throw new IHealthPharmException("Could not generate a settlement reference.",
+					HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+
+		return String.format("DPCA%s%04d", new SimpleDateFormat("ddMMyy").format(new Date()), sequence);
 	}
 
 	private void validateRequest(CreditAllocationRequestDTO request) {

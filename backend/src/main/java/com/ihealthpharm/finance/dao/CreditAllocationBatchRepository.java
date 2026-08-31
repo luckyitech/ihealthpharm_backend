@@ -21,9 +21,6 @@ public interface CreditAllocationBatchRepository extends JpaRepository<CreditAll
 	/** Cheque batches waiting on approval before their bills are settled. */
 	List<CreditAllocationBatchModel> findByChequeIdAndStatus(Integer chequeId, String status);
 
-	/** Drives the daily sequence in a batch reference. */
-	long countByBatchRefStartingWith(String batchRefPrefix);
-
 	/**
 	 * The most recent settlements, for the screen that reverses them.
 	 *
