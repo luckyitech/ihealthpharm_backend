@@ -1,12 +1,15 @@
 package com.ihealthpharm.finance.service.impl;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -22,11 +25,15 @@ import com.ihealthpharm.finance.dao.AccountReceivablesRepository;
 import com.ihealthpharm.finance.dao.CreditAllocationBatchRepository;
 import com.ihealthpharm.finance.dao.CreditAllocationLineRepository;
 import com.ihealthpharm.finance.dao.OpenBillRepository;
+import com.ihealthpharm.finance.dto.CreditAccountSearchDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanLineDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationRequestDTO;
 import com.ihealthpharm.finance.dto.CreditSettlementActionDTO;
+import com.ihealthpharm.finance.dto.CreditSettlementAccessDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
+import com.ihealthpharm.finance.dto.SettlementSummaryDTO;
+import com.ihealthpharm.finance.helper.CreditSettlementAccessGuard;
 import com.ihealthpharm.finance.model.AccountReceivablesModel;
 import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 import com.ihealthpharm.finance.model.CreditAllocationLineModel;
@@ -35,6 +42,7 @@ import com.ihealthpharm.finance.service.CreditAllocationEngine;
 import com.ihealthpharm.finance.service.CreditAllocationService;
 import com.ihealthpharm.finance.service.GeneralLedgerService;
 import com.ihealthpharm.masters.dao.MasterAccountRepository;
+import com.ihealthpharm.masters.model.EmployeeCredentialsModel;
 import com.ihealthpharm.masters.model.MasterAccountModel;
 import com.ihealthpharm.masters.service.EmployeeCredentialsService;
 import com.ihealthpharm.sales.dao.SalesRepository;
@@ -94,6 +102,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	EmployeeCredentialsService employeeCredentialsService;
 
 	@Autowired
+	CreditSettlementAccessGuard creditSettlementAccessGuard;
+
+	@Autowired
 	GeneralLedgerService generalLedgerService;
 
 	@Autowired
@@ -101,6 +112,11 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Autowired
 	MasterAccountRepository masterAccountRepository;
+
+	@Override
+	public CreditSettlementAccessDTO getAccess(String userName) {
+		return creditSettlementAccessGuard.describe(userName);
+	}
 
 	@Override
 	public List<OpenBillDTO> findOpenBills(CreditAllocationRequestDTO request) {
@@ -137,7 +153,15 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Override
 	public CreditAllocationPlanDTO applyAllocation(CreditAllocationRequestDTO request, String userName) {
+		// Permission first: someone who may not settle at all should not be able to
+		// use this endpoint to find out whether a PIN is right.
+		creditSettlementAccessGuard.requireSettle(userName);
 		employeeCredentialsService.verifyApprovalPin(userName, request.getApprovalPin());
+
+		// Taken from the signed-in user, never from the request body - the same
+		// stance the controller takes on identity. Nothing was sending it, so
+		// every settled receivable was being stamped Approved by nobody.
+		request.setApprovedBy(resolveEmployeeId(userName));
 
 		CreditAllocationPlanDTO plan = previewAllocation(request);
 
@@ -161,6 +185,10 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		CreditAllocationBatchModel batch = saveBatch(request, plan, userName);
 		saveLines(batch, plan);
 
+		// What was written, so the screen reports it rather than inferring it.
+		plan.setBatchRef(batch.getBatchRef());
+		plan.setStatus(batch.getStatus());
+
 		if (isChequeHeld(request)) {
 			// Recorded, but the debt stands until the cheque is approved.
 			log.info("Credit settlement {} held pending cheque approval", batch.getBatchRef());
@@ -176,6 +204,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Override
 	public CreditAllocationBatchModel approveChequeSettlement(CreditSettlementActionDTO action, String userName) {
+		creditSettlementAccessGuard.requireSettle(userName);
 		employeeCredentialsService.verifyApprovalPin(userName, action.getApprovalPin());
 
 		CreditAllocationBatchModel batch = requireBatch(action.getBatchRef());
@@ -186,11 +215,15 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 					+ " and is not waiting on cheque approval.", HttpStatus.CONFLICT);
 		}
 
+		// Recorded before settling: toRequest reads it back off the batch, so the
+		// receivables are stamped with whoever approved the cheque rather than
+		// with whoever first recorded it.
+		batch.setApprovedBy(resolveEmployeeId(userName));
+
 		CreditAllocationPlanDTO plan = planFromBatch(batch);
 		settle(toRequest(batch), plan, batch);
 
 		batch.setStatus(CreditAllocationBatchModel.STATUS_ALLOCATED);
-		batch.setApprovedBy(action.getApprovedBy());
 		batch.setApprovedDate(new Date());
 		log.info("Cheque settlement {} approved by {}: {} across {} bills", batch.getBatchRef(), userName,
 				batch.getAllocatedAmount(), plan.getLines().size());
@@ -200,6 +233,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 
 	@Override
 	public CreditAllocationBatchModel reverseSettlement(CreditSettlementActionDTO action, String userName) {
+		creditSettlementAccessGuard.requireReverse(userName);
 		employeeCredentialsService.verifyApprovalPin(userName, action.getApprovalPin());
 
 		if (StringUtils.isBlank(action.getReason())) {
@@ -215,7 +249,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		}
 
 		batch.setReversalReason(action.getReason());
-		batch.setReversedBy(action.getApprovedBy());
+		batch.setReversedBy(resolveEmployeeId(userName));
 		batch.setReversedDate(new Date());
 
 		if (!action.isReverseAutomatically()) {
@@ -281,6 +315,14 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			receivable.setChequeDate(line.getPriorChequeDt());
 			accountReceivablesRepository.save(receivable);
 
+			// Contra entry. Applying the settlement credited this amount to the
+			// ledger, so unwinding it has to debit the same amount back out;
+			// otherwise a bounced cheque leaves the accounts still claiming
+			// money that was handed back. Referenced by the same batch, so the
+			// pair nets to nothing and can be seen to.
+			generalLedgerService.saveReceivableLedgerEntry(receivable,
+					line.getAmountApplied().negate(), batch.getBatchRef());
+
 			CreditAllocationPlanLineDTO planLine = new CreditAllocationPlanLineDTO();
 			planLine.setBillCode(line.getBillCode());
 			restored.getLines().add(planLine);
@@ -289,7 +331,20 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			creditAllocationLineRepository.save(line);
 		}
 
-		restoreBillChequeDetails(lines);
+		// The overpayment held on account was booked as cash received too, so it
+		// comes back out with everything else.
+		if (CreditAllocationBatchModel.OVERPAYMENT_HOLD_ON_ACCOUNT
+				.equalsIgnoreCase(batch.getOverpaymentAction())
+				&& Objects.nonNull(batch.getUnallocatedAmount())
+				&& batch.getUnallocatedAmount().signum() > 0) {
+
+			CreditAllocationLineModel lastLine = lines.get(lines.size() - 1);
+			accountReceivablesRepository.findById(lastLine.getAccountReceivablesId())
+					.ifPresent(receivable -> generalLedgerService.saveReceivableLedgerEntry(
+							receivable, batch.getUnallocatedAmount().negate(), batch.getBatchRef()));
+		}
+
+		restoreBillPaymentDetails(lines);
 
 		// Rebuild the bills from the receivables just restored.
 		reconcileBills(restored);
@@ -297,13 +352,16 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	}
 
 	/**
-	 * Puts back the cheque details settlement appended to each sales bill.
+	 * Puts back what settlement changed on each sales bill besides its balance.
 	 *
-	 * The receivables update adds the cheque number to a comma separated list
-	 * and adds to the bill's cheque amount, so without this a reversed cheque
-	 * stays listed against the bill and its amount is counted twice.
+	 * Two things need restoring. The receivables update adds the cheque number
+	 * to a comma separated list and adds to the bill's cheque amount, so a
+	 * reversed cheque would otherwise stay listed against the bill with its
+	 * amount counted twice. It also moves the settled amount out of the bill's
+	 * credit total and into the payment type it was settled with, which a
+	 * reversal that only rebuilt the balance would leave behind.
 	 */
-	private void restoreBillChequeDetails(List<CreditAllocationLineModel> lines) {
+	private void restoreBillPaymentDetails(List<CreditAllocationLineModel> lines) {
 		Set<Integer> done = new LinkedHashSet<>();
 		for (CreditAllocationLineModel line : lines) {
 			if (!Objects.nonNull(line.getSalesBillId()) || !done.add(line.getSalesBillId())) {
@@ -318,6 +376,14 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			bill.setChequeNumber(line.getPriorBillChequeNumber());
 			bill.setChequeAmount(priorBillCheque);
 			bill.setChequeDate(line.getPriorBillChequeDate());
+
+			if (Objects.nonNull(line.getPriorBillCashAmount())) {
+				bill.setCashAmount(line.getPriorBillCashAmount().floatValue());
+			}
+			if (Objects.nonNull(line.getPriorBillCreditAmount())) {
+				bill.setCreditAmount(line.getPriorBillCreditAmount().doubleValue());
+			}
+
 			salesRepository.save(bill);
 		}
 	}
@@ -386,7 +452,37 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		request.setPaymentRef(batch.getPaymentRef());
 		request.setApprovedBy(batch.getApprovedBy());
 		request.setChequeDate(batch.getChequeDate());
+		// Both were decided when the payment was taken and are only acted on at
+		// settlement, which for a cheque is here. Leaving the overpayment action
+		// behind would quietly drop money the user had asked to hold on account.
+		request.setOverpaymentAction(batch.getOverpaymentAction());
+		request.setReceiptNumber(batch.getReceiptNumber());
 		return request;
+	}
+
+	/**
+	 * The employee behind a signed-in user name.
+	 *
+	 * The Receipts screen instead has the operator pick an approver from a list
+	 * and checks that person's PIN in the browser, which means the name on the
+	 * record is whoever was chosen rather than whoever acted. Settlement proves
+	 * identity server-side against the caller's own PIN, so the approver is the
+	 * caller and is looked up here rather than trusted from the request.
+	 */
+	private Integer resolveEmployeeId(String userName) {
+		EmployeeCredentialsModel credentials = employeeCredentialsService
+				.findEmployeeCredentialsByUserName(userName);
+
+		if (!Objects.nonNull(credentials) || !Objects.nonNull(credentials.getEmployee())) {
+			// The PIN check has already passed, so this would mean the account
+			// exists but is not linked to an employee. Better to stop than to
+			// record another settlement approved by nobody.
+			throw new IHealthPharmException(
+					"Your user account is not linked to an employee record, so the settlement "
+					+ "cannot be attributed. Ask an administrator to check it.",
+					HttpStatus.CONFLICT);
+		}
+		return credentials.getEmployee().getEmployeeId();
 	}
 
 	private Float toFloat(BigDecimal value) {
@@ -408,9 +504,20 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		}
 	}
 
-	/** A cheque is recorded on receipt but only settles once approved. */
+	/**
+	 * A cheque is recorded on receipt but only settles once approved.
+	 *
+	 * Decided by the payment type. This used to ask whether the request carried
+	 * a CHEQUE_ID, which nothing populates - not the controller and not the
+	 * screen - so it was always false: every cheque settled its bills on the
+	 * spot while the screen told the operator they were still outstanding, and
+	 * no batch could ever reach HELD_PENDING_APPROVAL for the approval step to
+	 * find. The rule the business stated is about the payment being a cheque,
+	 * so that is what is asked. A CHEQUE_ID still links the batch to a cheque
+	 * record where one exists, but no longer decides anything.
+	 */
 	private boolean isChequeHeld(CreditAllocationRequestDTO request) {
-		return Objects.nonNull(request.getChequeId());
+		return PAYMENT_TYPE_CHEQUE.equalsIgnoreCase(request.getPaymentType());
 	}
 
 	private CreditAllocationBatchModel saveBatch(CreditAllocationRequestDTO request,
@@ -428,6 +535,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		batch.setOrderConfirmedS(request.isOrderConfirmed() ? 'Y' : 'N');
 		batch.setPaymentType(request.getPaymentType());
 		batch.setPaymentRef(request.getPaymentRef());
+		batch.setReceiptNumber(request.getReceiptNumber());
 		batch.setChequeId(request.getChequeId());
 		batch.setChequeDate(request.getChequeDate());
 		batch.setOverpaymentAction(request.getOverpaymentAction());
@@ -481,6 +589,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	private void settle(CreditAllocationRequestDTO request, CreditAllocationPlanDTO plan,
 			CreditAllocationBatchModel batch) {
 		List<AccountReceivablesModel> payload = new ArrayList<>();
+		Map<String, BigDecimal> appliedPerBill = new HashMap<>();
 
 		for (CreditAllocationPlanLineDTO line : plan.getLines()) {
 			AccountReceivablesModel receivable = accountReceivablesRepository
@@ -489,7 +598,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 							"Outstanding bill " + line.getBillCode() + " could not be loaded.",
 							HttpStatus.NOT_FOUND));
 
-			refuseIfBillCannotAbsorb(line);
+			refuseIfBillCannotAbsorb(line, appliedPerBill);
 
 			boolean settledInFull = CreditAllocationEngine.STATUS_PAID
 					.equals(line.getResultingPaymentStatus());
@@ -530,25 +639,61 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				receivable.setChequeAmount(line.getAmountApplied().doubleValue());
 			}
 
-			if (StringUtils.isNotBlank(request.getReceiptNumber())) {
-				receivable.setReceiptNumber(request.getReceiptNumber());
-			}
+			// The payment's receipt number is deliberately not written here. A
+			// receivable's RECEIPT_NO is its own generated identifier (DPAR...)
+			// and is what the receipt and statement reports print, so putting a
+			// payment's number over it loses that reference. It is kept on the
+			// batch instead.
 
 			payload.add(receivable);
 		}
 
-		holdRemainderOnAccount(request, plan, payload);
+		BigDecimal heldOnAccount = holdRemainderOnAccount(request, plan, payload);
 
-		List<AccountReceivablesModel> settled = accountReceivablesService
-				.updateAccountsReceivablesData(payload);
+		accountReceivablesService.updateAccountsReceivablesData(payload);
 
 		// The Receipts screen makes two calls, not one: after saving the
 		// receivables it posts the ledger entries separately. Settling without
 		// this leaves the receivable updated and the accounts unbalanced.
-		generalLedgerService.saveMultipleLedgersDataForAccRecievables(
-				Objects.nonNull(settled) && !settled.isEmpty() ? settled : payload);
+		postLedgerEntries(plan, payload, heldOnAccount, batch.getBatchRef());
 
 		reconcileBills(plan);
+	}
+
+	/**
+	 * Books what the settlement actually moved.
+	 *
+	 * One entry per bill, for the amount this payment applied to it. The amount
+	 * has to be passed in rather than read off the receivable: a bill that
+	 * already held a part payment carries the running total in AMOUNT_RECEIVED,
+	 * and booking that would count the earlier money a second time.
+	 *
+	 * This replaces saveMultipleLedgersDataForAccRecievables, which sets a
+	 * debit or a credit only for credit and debit notes. Settlement only ever
+	 * touches "Sales Billing" rows, which fall through every branch there, so
+	 * each entry it wrote carried no amount at all - the 200,000 settlement of
+	 * 29 August posted 59 ledger rows summing to zero.
+	 *
+	 * Entries are referenced by the batch, so the ledger traces back to the
+	 * settlement that produced it and the pair can be reconciled.
+	 *
+	 * payload is built one element per plan line, in order, so the two are
+	 * indexed together.
+	 */
+	private void postLedgerEntries(CreditAllocationPlanDTO plan, List<AccountReceivablesModel> payload,
+			BigDecimal heldOnAccount, String batchRef) {
+
+		for (int i = 0; i < plan.getLines().size(); i++) {
+			generalLedgerService.saveReceivableLedgerEntry(payload.get(i),
+					plan.getLines().get(i).getAmountApplied(), batchRef);
+		}
+
+		if (Objects.nonNull(heldOnAccount) && heldOnAccount.signum() > 0) {
+			// Money the customer overpaid and chose to leave on account is still
+			// cash the business took in, so it is booked like the rest of it.
+			generalLedgerService.saveReceivableLedgerEntry(payload.get(payload.size() - 1),
+					heldOnAccount, batchRef);
+		}
 	}
 
 	/**
@@ -583,6 +728,9 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				line.setPriorBillChequeAmt(Objects.nonNull(priorBill.getChequeAmount())
 						? BigDecimal.valueOf(priorBill.getChequeAmount()) : null);
 				line.setPriorBillChequeDate(priorBill.getChequeDate());
+				line.setPriorBillCashAmount(toBigDecimal(priorBill.getCashAmount()));
+				line.setPriorBillCreditAmount(Objects.nonNull(priorBill.getCreditAmount())
+						? BigDecimal.valueOf(priorBill.getCreditAmount()) : null);
 			}
 			creditAllocationLineRepository.save(line);
 			return;
@@ -606,16 +754,16 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	 * against bills that never received it. The decision is kept on the batch
 	 * and the money stays unallocated for whoever pays it out.
 	 */
-	private void holdRemainderOnAccount(CreditAllocationRequestDTO request, CreditAllocationPlanDTO plan,
-			List<AccountReceivablesModel> payload) {
+	private BigDecimal holdRemainderOnAccount(CreditAllocationRequestDTO request,
+			CreditAllocationPlanDTO plan, List<AccountReceivablesModel> payload) {
 
 		if (plan.getUnallocatedAmount().signum() <= 0 || payload.isEmpty()) {
-			return;
+			return null;
 		}
 		if (!CreditAllocationBatchModel.OVERPAYMENT_HOLD_ON_ACCOUNT
 				.equalsIgnoreCase(request.getOverpaymentAction())) {
 			log.info("Overpayment of {} left unallocated for refund", plan.getUnallocatedAmount());
-			return;
+			return null;
 		}
 
 		BigDecimal remainder = plan.getUnallocatedAmount();
@@ -629,6 +777,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		lastSettled.setPaymentStatus(STATUS_OVER_PAID);
 
 		log.info("Overpayment of {} held on account against {}", remainder, lastSettled.getBillRefNo());
+		return remainder;
 	}
 
 	/**
@@ -692,26 +841,59 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	 * than reduce a real debt, so it stops instead - the receivable and the bill
 	 * disagree, and only a person can say which is right.
 	 */
-	private void refuseIfBillCannotAbsorb(CreditAllocationPlanLineDTO line) {
-		if (!Objects.nonNull(line.getSalesBillId())) {
-			// Nothing to check against; 528 of the oldest rows have no bill.
+	private void refuseIfBillCannotAbsorb(CreditAllocationPlanLineDTO line,
+			Map<String, BigDecimal> appliedPerBill) {
+
+		SalesModel bill = resolveBill(line);
+		if (!Objects.nonNull(bill) || !Objects.nonNull(bill.getBalanceAmount())
+				|| StringUtils.isBlank(line.getBillCode())) {
+			// Nothing to contradict the receivable, so it stands.
 			return;
 		}
 
-		SalesModel bill = salesRepository.findById(line.getSalesBillId()).orElse(null);
-		if (!Objects.nonNull(bill) || !Objects.nonNull(bill.getBalanceAmount())) {
-			return;
-		}
-
+		// Against everything this settlement has already put on the same bill,
+		// not just this line. 91 bill codes carry more than one open receivable
+		// and 39 of them claim more between them than the bill has outstanding -
+		// DPSB3004210007 has three claims totalling 22,000 against a balance of
+		// 6,000. Checked line by line they each look affordable, because the
+		// bill is not written until the batch finishes; the payment would then
+		// disappear into the duplicate claim and the bill would simply cap
+		// itself at paid.
+		String billCode = line.getBillCode().trim();
+		BigDecimal cumulative = appliedPerBill.getOrDefault(billCode, BigDecimal.ZERO)
+				.add(line.getAmountApplied());
 		BigDecimal billBalance = BigDecimal.valueOf(bill.getBalanceAmount());
-		if (billBalance.compareTo(line.getAmountApplied()) < 0) {
-			log.warn("Refusing to settle {}: bill balance {} cannot absorb {}", line.getBillCode(),
-					billBalance, line.getAmountApplied());
+
+		if (billBalance.compareTo(cumulative) < 0) {
+			log.warn("Refusing to settle {}: bill balance {} cannot absorb {} ({} already applied "
+					+ "to it by this settlement)", billCode, billBalance, cumulative,
+					cumulative.subtract(line.getAmountApplied()));
 			throw new IHealthPharmException(
-					"Bill " + line.getBillCode() + " shows " + billBalance
-					+ " outstanding but the receivable claims more. Settle it manually after the records are corrected.",
+					"Bill " + billCode + " shows " + billBalance
+					+ " outstanding but the receivables against it claim " + cumulative
+					+ ". Settle it manually after the records are corrected.",
 					HttpStatus.CONFLICT);
 		}
+		appliedPerBill.put(billCode, cumulative);
+	}
+
+	/**
+	 * The sales bill behind an allocation line.
+	 *
+	 * By id where the receivable carries one and by code otherwise: 616 of the
+	 * 2,980 settleable rows have no SALES_BILL_ID, and looking only by id
+	 * skipped the check above for every one of them. Bill codes are unique, so
+	 * the fallback resolves to one bill or none.
+	 */
+	private SalesModel resolveBill(CreditAllocationPlanLineDTO line) {
+		if (Objects.nonNull(line.getSalesBillId())) {
+			SalesModel bill = salesRepository.findById(line.getSalesBillId()).orElse(null);
+			if (Objects.nonNull(bill)) {
+				return bill;
+			}
+		}
+		return StringUtils.isNotBlank(line.getBillCode())
+				? salesRepository.getSalesRecordByNo(line.getBillCode().trim()) : null;
 	}
 
 	/** Batch reference in the house style: DPCA + ddMMyy + a daily sequence. */
@@ -735,6 +917,71 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	 * Columns arrive in the order declared on the query: receivable id, sales
 	 * bill id, bill code, bill date, outstanding, payment status.
 	 */
+	/** Shortest search that is worth running against 31,000 receivables. */
+	private static final int MIN_SEARCH_LENGTH = 2;
+
+	@Override
+	public List<CreditAccountSearchDTO> searchCreditAccounts(String term) {
+		List<CreditAccountSearchDTO> accounts = new ArrayList<>();
+
+		// One character would match most of the ledger and tell the user
+		// nothing. The screen holds off too; this is the guard behind it.
+		if (StringUtils.isBlank(term) || term.trim().length() < MIN_SEARCH_LENGTH) {
+			return accounts;
+		}
+
+		List<Object[]> rows = openBillRepository.searchCreditAccounts("%" + term.trim() + "%");
+		if (!Objects.nonNull(rows)) {
+			return accounts;
+		}
+
+		for (Object[] row : rows) {
+			CreditAccountSearchDTO account = new CreditAccountSearchDTO();
+			account.setMasterAccountNo(toString(row[0]));
+			account.setCustomerNames(toString(row[1]));
+			account.setCustomerCount(Objects.nonNull(row[2]) ? ((Number) row[2]).intValue() : 0);
+			account.setOpenBills(Objects.nonNull(row[3]) ? ((Number) row[3]).intValue() : 0);
+			// Summing a FLOAT column spills fractions of a cent - 33137.549987...
+			// for a balance of 33137.55 - so round the total as money before it
+			// is shown, the same way the engine rounds what it allocates.
+			BigDecimal outstanding = toBigDecimal(row[4]);
+			account.setOutstanding(Objects.nonNull(outstanding)
+					? outstanding.setScale(2, RoundingMode.HALF_UP) : null);
+			accounts.add(account);
+		}
+		return accounts;
+	}
+
+	@Override
+	public List<SettlementSummaryDTO> findRecentSettlements(String masterAccountNo) {
+		List<SettlementSummaryDTO> settlements = new ArrayList<>();
+
+		List<Object[]> rows = creditAllocationBatchRepository.findRecentSettlements(
+				StringUtils.isBlank(masterAccountNo) ? null : masterAccountNo.trim());
+		if (!Objects.nonNull(rows)) {
+			return settlements;
+		}
+
+		for (Object[] row : rows) {
+			SettlementSummaryDTO settlement = new SettlementSummaryDTO();
+			settlement.setBatchRef(toString(row[0]));
+			settlement.setMasterAccountNo(toString(row[1]));
+			settlement.setPaymentAmount(toBigDecimal(row[2]));
+			settlement.setAllocatedAmount(toBigDecimal(row[3]));
+			settlement.setPaymentType(toString(row[4]));
+			settlement.setPaymentRef(toString(row[5]));
+			settlement.setStatus(toString(row[6]));
+			settlement.setAllocationOrder(toString(row[7]));
+			settlement.setSettledOn(Objects.nonNull(row[8]) ? (Date) row[8] : null);
+			settlement.setReversalReason(toString(row[9]));
+			settlement.setUnallocatedAmount(toBigDecimal(row[10]));
+			settlement.setOverpaymentAction(toString(row[11]));
+			settlement.setBillCount(Objects.nonNull(row[12]) ? ((Number) row[12]).intValue() : 0);
+			settlements.add(settlement);
+		}
+		return settlements;
+	}
+
 	private List<OpenBillDTO> toOpenBills(List<Object[]> rows) {
 		List<OpenBillDTO> openBills = new ArrayList<>();
 		if (!Objects.nonNull(rows)) {

@@ -28,11 +28,17 @@ public interface AccountReceivablesRepository extends JpaRepository<AccountRecei
 	 * Used to rebuild the bill's balance from the receivables rather than
 	 * adjusting it by the amount just applied, so the figure cannot drift or
 	 * be counted twice.
+	 *
+	 * Matches the bill the same way the open-bill queries name it - see
+	 * {@link ReceivableSql#BILL_CODE_MATCH}. Matching on BILL_NO alone missed
+	 * the 436 settleable rows that keep their code in SOURCE_REF, so settling
+	 * one of those summed nothing and rebuilt its bill as wholly unpaid,
+	 * discarding the payments already recorded against it.
 	 */
 	@Query(nativeQuery = true, value =
 		"SELECT COALESCE(SUM(ar.AMOUNT_RECEIVED),0) FROM account_receivables ar "
-		+ "WHERE ar.BILL_NO = :billCode AND ar.SOURCE_TYPE = 'Sales Billing' "
-		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' AND ar.PAYMENT_STATUS <> 'Cancel'")
+		+ "WHERE " + ReceivableSql.BILL_CODE_MATCH
+		+ ReceivableSql.RECEIVED_PREDICATE)
 	BigDecimal sumReceivedForBill(@Param("billCode") String billCode);
 	List<AccountReceivablesModel> findAllByOrderByLastUpdateTimestampDesc();
 	 

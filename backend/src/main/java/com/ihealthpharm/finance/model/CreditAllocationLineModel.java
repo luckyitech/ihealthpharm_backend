@@ -114,6 +114,20 @@ public class CreditAllocationLineModel extends AuditModel {
 	@Column(name = "PRIOR_BILL_CHEQUE_DATE", length = 30)
 	private String priorBillChequeDate;
 
+	/**
+	 * The sales bill's payment mix before this batch changed it.
+	 *
+	 * Settling a credit bill moves the amount out of the bill's credit total
+	 * and into whichever payment type it was settled with, so a reversal that
+	 * only put the balance back would leave the bill still showing the money as
+	 * received.
+	 */
+	@Column(name = "PRIOR_BILL_CASH_AMOUNT")
+	private BigDecimal priorBillCashAmount;
+
+	@Column(name = "PRIOR_BILL_CREDIT_AMOUNT")
+	private BigDecimal priorBillCreditAmount;
+
 	@Column(name = "RESULTING_PAYMENT_STATUS", length = 20)
 	private String resultingPaymentStatus;
 

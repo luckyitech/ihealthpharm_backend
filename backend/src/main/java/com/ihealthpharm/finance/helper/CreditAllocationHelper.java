@@ -9,6 +9,9 @@ import lombok.Data;
 @Data
 public class CreditAllocationHelper {
 
+	@Value("${creditAllocation.access.response}")
+	public String accessMessage;
+
 	@Value("${creditAllocation.openBills.response}")
 	public String openBillsMessage;
 
@@ -20,6 +23,13 @@ public class CreditAllocationHelper {
 
 	@Value("${creditAllocation.applied.response}")
 	public String appliedMessage;
+
+	/**
+	 * A cheque is recorded but settles nothing until it is approved, so saying
+	 * the credit was settled would be untrue of the only path that reaches it.
+	 */
+	@Value("${creditAllocation.chequeHeld.response}")
+	public String chequeHeldMessage;
 
 	@Value("${creditAllocation.chequeApproved.response}")
 	public String chequeApprovedMessage;

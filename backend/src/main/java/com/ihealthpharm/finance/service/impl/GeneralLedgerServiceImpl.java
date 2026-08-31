@@ -1,5 +1,6 @@
 package com.ihealthpharm.finance.service.impl;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -141,31 +142,85 @@ public class GeneralLedgerServiceImpl implements GeneralLedgerService {
 
 	@Override
 	public GeneralLedgerModel saveGeneralLedgerData(AccountReceivablesModel generalLedgerModel) {
-		GeneralLedgerModel ledgerModelObj=new GeneralLedgerModel();
+		GeneralLedgerModel ledgerModelObj = newReceivableEntry(generalLedgerModel,
+				generalLedgerModel.getReceiptNumber());
 
-		ledgerModelObj.setJournalId(uniqueCodeService.findByUniqueCodeName("GL"));
-		ledgerModelObj.setJournalRef(generalLedgerModel.getReceiptNumber());
-		ledgerModelObj.setEntryNo(generalLedgerModel.getSourceRef());
-		ledgerModelObj.setEntryType(generalLedgerModel.getSourceType());
-		ledgerModelObj.setCounterParty(generalLedgerModel.getCustomerName());
-		ledgerModelObj.setParty(pharmacyService.findPharmacyById(generalLedgerModel.getPharmacyModel().getPharmacyId()).getPharmacyName());
-		ledgerModelObj.setEntryDate(new Date());
-		ledgerModelObj.setCreatedUser(generalLedgerModel.getCreatedUser());
-		ledgerModelObj.setLastUpdateUser(generalLedgerModel.getLastUpdateUser());
-		if(generalLedgerModel.getAmountReceived() > 0) {
+		// Left exactly as it was. This books a negative debit rather than a
+		// positive one, which disagrees with how the rest of the ledger records
+		// a reduction - see saveReceivableLedgerEntry - but it is what the 324
+		// existing Sales Billing rows were written by, and correcting it is a
+		// separate decision from getting credit settlement right.
+		if (generalLedgerModel.getAmountReceived() > 0) {
 			ledgerModelObj.setCredit(generalLedgerModel.getAmountReceived());
 			ledgerModelObj.setDebit(0.0);
 		} else {
 			ledgerModelObj.setDebit(new Double(generalLedgerModel.getAmountReceived()));
 			ledgerModelObj.setCredit(new Float(0.0));
 		}
-		ledgerModelObj.setBalance(0.0);
-		ledgerModelObj.setPharmacyModel(generalLedgerModel.getPharmacyModel());
 
-		GeneralLedgerModel respose=generalLegderRepo.save(ledgerModelObj);
+		return generalLegderRepo.save(ledgerModelObj);
+	}
 
+	/**
+	 * Everything a ledger entry against a receivable carries except its amount.
+	 */
+	private GeneralLedgerModel newReceivableEntry(AccountReceivablesModel receivable, String journalRef) {
+		GeneralLedgerModel entry = new GeneralLedgerModel();
 
-		return respose;
+		entry.setJournalId(uniqueCodeService.findByUniqueCodeName("GL"));
+		entry.setJournalRef(journalRef);
+		entry.setEntryNo(receivable.getSourceRef());
+		entry.setEntryType(receivable.getSourceType());
+		entry.setCounterParty(receivable.getCustomerName());
+		entry.setParty(pharmacyService
+				.findPharmacyById(receivable.getPharmacyModel().getPharmacyId()).getPharmacyName());
+		entry.setEntryDate(new Date());
+		entry.setCreatedUser(receivable.getCreatedUser());
+		entry.setLastUpdateUser(receivable.getLastUpdateUser());
+		entry.setBalance(0.0);
+		entry.setPharmacyModel(receivable.getPharmacyModel());
+
+		return entry;
+	}
+
+	/**
+	 * Books one movement against a receivable, for the amount the caller says
+	 * moved.
+	 *
+	 * The multi-row sibling above works off the receivable's cumulative
+	 * AMOUNT_RECEIVED and books nothing at all unless the row is a credit or
+	 * debit note, which is no use to anything settling a "Sales Billing" row -
+	 * a 200,000 credit settlement posted 59 ledger rows carrying no debit and
+	 * no credit. Passing the amount in explicitly is what makes the entry both
+	 * present and right: a bill that already held a part payment must book only
+	 * what this payment added, not the running total.
+	 *
+	 * A positive amount is money coming in and is credited; a negative one
+	 * reverses it and is debited, which is how a settlement is unwound.
+	 */
+	@Override
+	public GeneralLedgerModel saveReceivableLedgerEntry(AccountReceivablesModel receivable,
+			BigDecimal amount, String journalRef) {
+
+		GeneralLedgerModel entry = newReceivableEntry(receivable, journalRef);
+
+		// Both columns hold positive amounts, which is how the rest of this
+		// ledger is written and the only way its two halves total correctly:
+		// an expense posts a debit leg and a credit leg of the same positive
+		// amount, and a credit note - the system's own way of taking value back
+		// off a customer's receivable, the same shape as reversing a settlement
+		// - is stored as a positive debit across 608 rows. Booking a reversal
+		// as a negative debit instead would not cancel the collection under
+		// credit minus debit; it would count it a second time.
+		if (amount.signum() >= 0) {
+			entry.setCredit(amount.floatValue());
+			entry.setDebit(0.0);
+		} else {
+			entry.setDebit(amount.negate().doubleValue());
+			entry.setCredit(new Float(0.0));
+		}
+
+		return generalLegderRepo.save(entry);
 	}
 
 

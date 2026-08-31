@@ -45,6 +45,20 @@ public class CreditAllocationPlanDTO implements Serializable {
 
 	private int openBillCount;
 
+	/**
+	 * The settlement this plan became, once it has been applied.
+	 *
+	 * Null for a preview. The screen used to decide what to tell the user by
+	 * looking at the payment type it had just sent, which is a guess about what
+	 * the server did rather than a report of it - and it guessed wrong, saying
+	 * a cheque was held when the cheque had in fact settled the bills. What was
+	 * actually written is carried back here instead.
+	 */
+	private String batchRef;
+
+	/** ALLOCATED or HELD_PENDING_APPROVAL, as recorded on the batch. */
+	private String status;
+
 	public boolean isFullyAllocated() {
 		return unallocatedAmount != null && unallocatedAmount.signum() == 0;
 	}

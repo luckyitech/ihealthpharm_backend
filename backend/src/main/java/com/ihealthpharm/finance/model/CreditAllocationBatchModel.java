@@ -100,6 +100,17 @@ public class CreditAllocationBatchModel extends AuditModel {
 	@Column(name = "PAYMENT_REF", length = 50)
 	private String paymentRef;
 
+	/**
+	 * Receipt number issued for this payment.
+	 *
+	 * Held here rather than on the receivable: a receivable's RECEIPT_NO is its
+	 * own generated identifier and is what the receipt and statement reports
+	 * print, so writing a payment's number over it loses the reference those
+	 * reports depend on.
+	 */
+	@Column(name = "RECEIPT_NUMBER", length = 25)
+	private String receiptNumber;
+
 	@Column(name = "CHEQUE_ID")
 	private Integer chequeId;
 

@@ -2,13 +2,34 @@ package com.ihealthpharm.finance.service;
 
 import java.util.List;
 
+import com.ihealthpharm.finance.dto.CreditAccountSearchDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationRequestDTO;
+import com.ihealthpharm.finance.dto.CreditSettlementAccessDTO;
 import com.ihealthpharm.finance.dto.CreditSettlementActionDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
+import com.ihealthpharm.finance.dto.SettlementSummaryDTO;
 import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 
 public interface CreditAllocationService {
+
+	/**
+	 * What the signed-in user is allowed to do here.
+	 *
+	 * Lets the screen hide what the user cannot use. The endpoints enforce the
+	 * same permissions themselves, so this is only what to show, never the
+	 * check itself.
+	 */
+	CreditSettlementAccessDTO getAccess(String userName);
+
+	/**
+	 * Credit accounts matching what the user has typed into the search box.
+	 *
+	 * Lets the screen offer accounts as the user types, rather than requiring
+	 * an account code to be known or typed exactly. Returns nothing for a term
+	 * shorter than two characters.
+	 */
+	List<CreditAccountSearchDTO> searchCreditAccounts(String term);
 
 	/** The bills a payment could be applied to, in the order it would fill them. */
 	List<OpenBillDTO> findOpenBills(CreditAllocationRequestDTO request);
@@ -35,6 +56,14 @@ public interface CreditAllocationService {
 	 * @param userName the signed-in user, whose PIN is checked
 	 */
 	CreditAllocationPlanDTO applyAllocation(CreditAllocationRequestDTO request, String userName);
+
+	/**
+	 * The most recent settlements, newest first.
+	 *
+	 * Backs the screen that reverses a settlement or approves a held cheque.
+	 * Pass a blank account for recent activity across all accounts.
+	 */
+	List<SettlementSummaryDTO> findRecentSettlements(String masterAccountNo);
 
 	/**
 	 * Settles a cheque batch that was held pending approval.

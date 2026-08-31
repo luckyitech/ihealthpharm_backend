@@ -10,15 +10,20 @@ import javax.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.ihealthpharm.commons.BaseDto;
+import com.ihealthpharm.finance.dto.CreditAccountSearchDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationPlanDTO;
 import com.ihealthpharm.finance.dto.CreditAllocationRequestDTO;
+import com.ihealthpharm.finance.dto.CreditSettlementAccessDTO;
 import com.ihealthpharm.finance.dto.CreditSettlementActionDTO;
 import com.ihealthpharm.finance.dto.OpenBillDTO;
+import com.ihealthpharm.finance.dto.SettlementSummaryDTO;
 import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
 import com.ihealthpharm.finance.helper.CreditAllocationHelper;
 import com.ihealthpharm.finance.service.CreditAllocationService;
@@ -26,12 +31,12 @@ import com.ihealthpharm.finance.service.CreditAllocationService;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Read-only endpoints for credit settlement.
+ * Endpoints for credit settlement.
  *
- * Nothing here changes a record: they show which bills are outstanding and what
- * a payment would settle. Applying an allocation is deliberately a separate
- * endpoint still to be added, so the cascade can be exercised against live data
- * first.
+ * Looking up bills and previewing an allocation change nothing, so they can be
+ * run against live data freely. The three that do change records - apply,
+ * approve and reverse - each require both the caller's permission and their
+ * approval PIN.
  */
 @RestController
 @CrossOrigin
@@ -43,6 +48,35 @@ public class CreditAllocationController {
 
 	@Autowired
 	CreditAllocationHelper creditAllocationHelper;
+
+	/**
+	 * What the signed-in user may do here, so the screen can hide the rest.
+	 *
+	 * A GET with no body: the user is taken from the authenticated principal,
+	 * so there is nothing for a caller to supply and nothing to tamper with.
+	 */
+	@GetMapping("/creditAllocation/access")
+	public ResponseEntity<BaseDto<CreditSettlementAccessDTO>> getAccess(Principal principal) {
+
+		CreditSettlementAccessDTO access = creditAllocationService.getAccess(principal.getName());
+
+		return new BaseDto<>(access, creditAllocationHelper.getAccessMessage(), OK).respond();
+	}
+
+	/**
+	 * Credit accounts matching what the user is typing, for the search box.
+	 *
+	 * Read-only and cheap, so the screen can call it on each keystroke once the
+	 * term is long enough to be worth looking up.
+	 */
+	@GetMapping("/creditAllocation/searchAccounts")
+	public ResponseEntity<BaseDto<List<CreditAccountSearchDTO>>> searchAccounts(
+			@RequestParam String term) {
+
+		List<CreditAccountSearchDTO> accounts = creditAllocationService.searchCreditAccounts(term);
+
+		return new BaseDto<>(accounts, creditAllocationHelper.getOpenBillsMessage(), OK).respond();
+	}
 
 	/** The outstanding bills a payment could be applied to. */
 	@PostMapping("/creditAllocation/openBills")
@@ -87,11 +121,34 @@ public class CreditAllocationController {
 
 		CreditAllocationPlanDTO plan = creditAllocationService.applyAllocation(request, principal.getName());
 
-		String message = plan.isOrderConfirmationRequired()
-				? creditAllocationHelper.getOrderConfirmationMessage()
-				: creditAllocationHelper.getAppliedMessage();
+		// Reported from the status that was recorded, not from what was asked
+		// for: a cheque is written down but settles nothing until approved, and
+		// calling that "settled" is what led operators to enter it twice.
+		String message;
+		if (plan.isOrderConfirmationRequired()) {
+			message = creditAllocationHelper.getOrderConfirmationMessage();
+		} else if (CreditAllocationBatchModel.STATUS_HELD_PENDING_APPROVAL.equals(plan.getStatus())) {
+			message = creditAllocationHelper.getChequeHeldMessage();
+		} else {
+			message = creditAllocationHelper.getAppliedMessage();
+		}
 
 		return new BaseDto<>(plan, message, OK).respond();
+	}
+
+	/**
+	 * Recent settlements, so one can be picked to reverse or approve.
+	 *
+	 * Read-only. Pass no account to see recent activity across all accounts.
+	 */
+	@GetMapping("/creditAllocation/recentSettlements")
+	public ResponseEntity<BaseDto<List<SettlementSummaryDTO>>> recentSettlements(
+			@RequestParam(required = false) String masterAccountNo) {
+
+		List<SettlementSummaryDTO> settlements =
+				creditAllocationService.findRecentSettlements(masterAccountNo);
+
+		return new BaseDto<>(settlements, creditAllocationHelper.getOpenBillsMessage(), OK).respond();
 	}
 
 	/** Settles a cheque payment that was held until the cheque cleared. */

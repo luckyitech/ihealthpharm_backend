@@ -15,65 +15,94 @@ import com.ihealthpharm.finance.model.CreditAllocationBatchModel;
  * Hangs off {@link CreditAllocationBatchModel} only because Spring Data needs an
  * entity to bind to - every query here is native and returns projections rather
  * than that entity.
+ *
+ * The joins and predicates come from {@link ReceivableSql} rather than being
+ * written out here, so the rules these queries use to find a bill are the same
+ * ones every other query uses.
  */
 @Repository
 public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchModel, Integer> {
 
 	/**
-	 * Keeps settled bills out of the cascade.
+	 * Credit accounts matching what the user has typed, for the search box.
 	 *
-	 * 615 open receivables claim money on sales bills that carry no balance -
-	 * around 5.7m in total. The bill was paid but its receivable rows were never
-	 * closed, so the debt only exists on one side. Settling one of those drives
-	 * the bill's balance negative: DPSB2405210150 has a NET_AMOUNT of 7,894 and
-	 * has already received exactly that, yet two of its rows still claim 12,453
-	 * outstanding.
+	 * Matches on either the account number or a customer name, because a
+	 * pharmacist taking a payment knows the person, not the code. Columns, in
+	 * order: account number, the names on it, how many names, open bill count,
+	 * total outstanding.
 	 *
-	 * A receivable with no matching bill is kept - 528 of the oldest rows no
-	 * longer join to one, and there is nothing to contradict them.
+	 * Every name on the account is returned rather than one of them: an account
+	 * can carry several customers - DPCR1410220002 holds bills for two - and
+	 * showing only the first would hide who the payment is actually settling
+	 * for.
+	 *
+	 * The second half of the union covers customers with no credit account at
+	 * all, who between them still owe about 1.6m across 359 bills. They come
+	 * back with a null account number, and are settled by name. Both halves are
+	 * ordered together by what is owed, so the account a payment is most likely
+	 * meant for comes first whichever kind it is.
 	 */
-	String STALE_BILL_GUARD =
-		"  AND (COALESCE(s1.BILL_ID, s2.BILL_ID) IS NULL "
-		+ "       OR COALESCE(s1.BALANCE_AMOUNT, s2.BALANCE_AMOUNT) > 0) ";
+	@Query(nativeQuery = true, value =
+		"SELECT ar.MASTER_ACC_NO, "
+		+ "       GROUP_CONCAT(DISTINCT ar.CUSTOMER_NAME ORDER BY ar.CUSTOMER_NAME SEPARATOR ', '), "
+		+ "       COUNT(DISTINCT ar.CUSTOMER_NAME), "
+		+ "       COUNT(*), "
+		+ "       SUM(ar.AMOUNT_TO_BE_RECEIVED) "
+		+ "FROM account_receivables ar "
+		+ ReceivableSql.BILL_JOINS
+		+ "WHERE ar.MASTER_ACC_NO IS NOT NULL AND ar.MASTER_ACC_NO <> '' "
+		+ "  AND (ar.MASTER_ACC_NO LIKE :term OR ar.CUSTOMER_NAME LIKE :term) "
+		+ ReceivableSql.OPEN_BILL_PREDICATE
+		+ ReceivableSql.STALE_BILL_GUARD
+		+ "GROUP BY ar.MASTER_ACC_NO "
+		+ "UNION ALL "
+		+ "SELECT NULL, ar.CUSTOMER_NAME, 1, COUNT(*), SUM(ar.AMOUNT_TO_BE_RECEIVED) "
+		+ "FROM account_receivables ar "
+		+ ReceivableSql.BILL_JOINS
+		+ "WHERE (ar.MASTER_ACC_NO IS NULL OR ar.MASTER_ACC_NO = '') "
+		+ "  AND ar.CUSTOMER_NAME LIKE :term "
+		+ ReceivableSql.OPEN_BILL_PREDICATE
+		+ ReceivableSql.STALE_BILL_GUARD
+		+ "GROUP BY ar.CUSTOMER_NAME "
+		+ "ORDER BY 5 DESC "
+		+ "LIMIT 20")
+	List<Object[]> searchCreditAccounts(@Param("term") String term);
 
 	/**
 	 * Columns, in order: receivable id, sales bill id, bill code, bill date,
 	 * outstanding, payment status.
 	 *
+	 * Ordered oldest bill first. The cascade sorts again for itself, but the
+	 * screen shows this list as it arrives and labels the first row as the
+	 * oldest debt, which is only true if the query says so.
+	 *
 	 * Only "Sales Billing" rows are returned - credit and debit notes stay a
-	 * manual decision. The date falls back through both join paths before
-	 * settling for the receipt date: about 17% of the oldest rows (all
-	 * pre-2022) no longer resolve to a sales bill at all.
+	 * manual decision. About 17% of the oldest rows resolve to no sales bill at
+	 * all and fall back to the receipt date for ordering.
 	 */
 	@Query(nativeQuery = true, value =
-		"SELECT ar.ACCOUNT_RECEIVABLES_ID, ar.SALES_BILL_ID, ar.BILL_NO, "
-		+ "       COALESCE(s1.BILL_DATE, s2.BILL_DATE, ar.RECEIPT_DATE) AS BILL_DATE, "
+		"SELECT ar.ACCOUNT_RECEIVABLES_ID, ar.SALES_BILL_ID, " + ReceivableSql.BILL_CODE + ", "
+		+ "       " + ReceivableSql.BILL_DATE + " AS BILL_DATE, "
 		+ "       ar.AMOUNT_TO_BE_RECEIVED, ar.PAYMENT_STATUS "
 		+ "FROM account_receivables ar "
-		+ "LEFT JOIN sales s1 ON s1.BILL_ID   = ar.SALES_BILL_ID "
-		+ "LEFT JOIN sales s2 ON s2.BILL_CODE = ar.BILL_NO "
+		+ ReceivableSql.BILL_JOINS
 		+ "WHERE ar.MASTER_ACC_NO = :masterAccountNo "
-		+ "  AND ar.SOURCE_TYPE = 'Sales Billing' "
-		+ "  AND ar.PAYMENT_STATUS IN ('Pending','Partially Paid') "
-		+ "  AND ar.AMOUNT_TO_BE_RECEIVED > 0 "
-		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' "
-		+ STALE_BILL_GUARD)
+		+ ReceivableSql.OPEN_BILL_PREDICATE
+		+ ReceivableSql.STALE_BILL_GUARD
+		+ "ORDER BY BILL_DATE ASC, ar.ACCOUNT_RECEIVABLES_ID ASC")
 	List<Object[]> findOpenBillsByMasterAccount(@Param("masterAccountNo") String masterAccountNo);
 
 	/** As above, for customers with no credit account. */
 	@Query(nativeQuery = true, value =
-		"SELECT ar.ACCOUNT_RECEIVABLES_ID, ar.SALES_BILL_ID, ar.BILL_NO, "
-		+ "       COALESCE(s1.BILL_DATE, s2.BILL_DATE, ar.RECEIPT_DATE) AS BILL_DATE, "
+		"SELECT ar.ACCOUNT_RECEIVABLES_ID, ar.SALES_BILL_ID, " + ReceivableSql.BILL_CODE + ", "
+		+ "       " + ReceivableSql.BILL_DATE + " AS BILL_DATE, "
 		+ "       ar.AMOUNT_TO_BE_RECEIVED, ar.PAYMENT_STATUS "
 		+ "FROM account_receivables ar "
-		+ "LEFT JOIN sales s1 ON s1.BILL_ID   = ar.SALES_BILL_ID "
-		+ "LEFT JOIN sales s2 ON s2.BILL_CODE = ar.BILL_NO "
+		+ ReceivableSql.BILL_JOINS
 		+ "WHERE ar.CUSTOMER_NAME = :customerName "
-		+ "  AND ar.SOURCE_TYPE = 'Sales Billing' "
-		+ "  AND ar.PAYMENT_STATUS IN ('Pending','Partially Paid') "
-		+ "  AND ar.AMOUNT_TO_BE_RECEIVED > 0 "
-		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' "
-		+ STALE_BILL_GUARD)
+		+ ReceivableSql.OPEN_BILL_PREDICATE
+		+ ReceivableSql.STALE_BILL_GUARD
+		+ "ORDER BY BILL_DATE ASC, ar.ACCOUNT_RECEIVABLES_ID ASC")
 	List<Object[]> findOpenBillsByCustomerName(@Param("customerName") String customerName);
 
 	/**
@@ -82,14 +111,19 @@ public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchM
 	 * Customer names are not unique - the master holds 1,206 duplicates - so a
 	 * name matching more than one account is refused rather than allocated,
 	 * which would otherwise settle one person's bills with another's money.
+	 *
+	 * Counts only accounts that actually have something settleable, using the
+	 * same rules as the bill list. Without the stale guard a name whose bills
+	 * are all stale would be reported as ambiguous when there is in fact
+	 * nothing to allocate against it.
 	 */
 	@Query(nativeQuery = true, value =
 		"SELECT DISTINCT ar.MASTER_ACC_NO FROM account_receivables ar "
+		+ ReceivableSql.BILL_JOINS
 		+ "WHERE ar.CUSTOMER_NAME = :customerName "
-		+ "  AND ar.SOURCE_TYPE = 'Sales Billing' "
-		+ "  AND ar.PAYMENT_STATUS IN ('Pending','Partially Paid') "
-		+ "  AND ar.AMOUNT_TO_BE_RECEIVED > 0 "
-		+ "  AND ar.MASTER_ACC_NO IS NOT NULL")
+		+ "  AND ar.MASTER_ACC_NO IS NOT NULL "
+		+ ReceivableSql.OPEN_BILL_PREDICATE
+		+ ReceivableSql.STALE_BILL_GUARD)
 	List<String> findMasterAccountsForCustomerName(@Param("customerName") String customerName);
 
 }
