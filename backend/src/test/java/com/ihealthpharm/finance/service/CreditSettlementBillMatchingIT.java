@@ -156,6 +156,41 @@ public class CreditSettlementBillMatchingIT {
 		System.out.println("open bills reachable only by code: " + viaCodeOnly);
 	}
 
+	/**
+	 * A customer picked as "no credit account" must get only their unaccounted
+	 * bills.
+	 *
+	 * HAWAII DIBA has one bill owing 14,864 with no account and twenty on
+	 * DPCR0210200003 owing 459,777. The search offers those separately, but the
+	 * bill lookup matched on name alone and returned all twenty-one - so a
+	 * payment meant for the single bill would have cascaded across her credit
+	 * account, and the screen showed a total the search had not promised.
+	 */
+	@Test
+	public void aCustomerWithNoAccountGetsOnlyTheirUnaccountedBills() {
+		com.ihealthpharm.finance.dto.CreditAllocationRequestDTO byName =
+				new com.ihealthpharm.finance.dto.CreditAllocationRequestDTO();
+		byName.setCustomerName("HAWAII DIBA");
+		byName.setPaymentAmount(new BigDecimal("100"));
+		byName.setAllocationOrder("OLDEST");
+		byName.setOrderConfirmed(true);
+
+		List<OpenBillDTO> unaccounted = creditAllocationService.findOpenBills(byName);
+		List<OpenBillDTO> onAccount = creditAllocationService.findOpenBills(requestFor("DPCR0210200003"));
+
+		assertFalse("expected an unaccounted bill for this customer", unaccounted.isEmpty());
+		assertFalse("expected bills on this credit account", onAccount.isEmpty());
+
+		// The two sets must not overlap: a bill belongs to one or the other.
+		for (OpenBillDTO free : unaccounted) {
+			for (OpenBillDTO held : onAccount) {
+				assertFalse("bill " + free.getBillCode() + " was returned both as unaccounted "
+						+ "and as belonging to the credit account",
+						free.getAccountReceivablesId().equals(held.getAccountReceivablesId()));
+			}
+		}
+	}
+
 	private com.ihealthpharm.finance.dto.CreditAllocationRequestDTO requestFor(String masterAccountNo) {
 		com.ihealthpharm.finance.dto.CreditAllocationRequestDTO request =
 				new com.ihealthpharm.finance.dto.CreditAllocationRequestDTO();

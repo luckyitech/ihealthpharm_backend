@@ -85,6 +85,19 @@ public final class ReceivableSql {
 		+ "  AND COALESCE(ar.ACTIVE_S,'Y') = 'Y' ";
 
 	/**
+	 * A receivable belonging to no credit account.
+	 *
+	 * The search box offers such customers as a separate entry - "no credit
+	 * account" - counting only these rows. Anything that then loads their bills
+	 * has to use the same rule, or the two disagree: HAWAII DIBA was offered as
+	 * one bill owing 14,864 and, once picked, produced 21 bills owing 474,641,
+	 * because the bill lookup matched on name alone and swept in the twenty
+	 * bills sitting on her credit account.
+	 */
+	public static final String NO_CREDIT_ACCOUNT =
+		"  AND (ar.MASTER_ACC_NO IS NULL OR ar.MASTER_ACC_NO = '') ";
+
+	/**
 	 * Which rows count towards what a bill has received.
 	 *
 	 * Wider than {@link #OPEN_BILL_PREDICATE} on purpose: a bill's total

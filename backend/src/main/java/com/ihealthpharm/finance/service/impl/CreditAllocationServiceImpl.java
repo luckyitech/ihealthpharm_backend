@@ -143,20 +143,20 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 					openBillRepository.findOpenBillsByMasterAccount(request.getMasterAccountNo().trim()));
 		}
 
-		String customerName = request.getCustomerName().trim();
-		List<String> accounts = openBillRepository.findMasterAccountsForCustomerName(customerName);
-
-		if (accounts.size() > 1) {
-			// Names are not unique. Guessing here would settle one person's bills
-			// with another person's money.
-			log.warn("Refusing to allocate by name '{}': it matches {} credit accounts", customerName,
-					accounts.size());
-			throw new IHealthPharmException(
-					"More than one credit account is open under this name. Select the credit account to settle.",
-					HttpStatus.CONFLICT);
-		}
-
-		return toOpenBills(openBillRepository.findOpenBillsByCustomerName(customerName));
+		// By name means the customer has no credit account, which is how the
+		// search offers them, and the lookup now returns only their unaccounted
+		// bills. It used to refuse when the name also matched more than one
+		// credit account - a guard against settling one person's bills with
+		// another's money, which made sense while this path could reach account
+		// bills at all. It no longer can, so refusing on the count of accounts
+		// it will not touch only turns two customers away for no reason.
+		//
+		// What remains is that two people sharing a name and both lacking an
+		// account are settled as one. The search groups them the same way, so
+		// the screen and this agree; telling them apart needs something other
+		// than a name, which these rows do not carry.
+		return toOpenBills(
+				openBillRepository.findOpenBillsByCustomerName(request.getCustomerName().trim()));
 	}
 
 	@Override

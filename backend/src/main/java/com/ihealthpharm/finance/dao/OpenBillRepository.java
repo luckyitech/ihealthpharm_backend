@@ -59,8 +59,8 @@ public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchM
 		+ "SELECT NULL, ar.CUSTOMER_NAME, 1, COUNT(*), SUM(ar.AMOUNT_TO_BE_RECEIVED) "
 		+ "FROM account_receivables ar "
 		+ ReceivableSql.BILL_JOINS
-		+ "WHERE (ar.MASTER_ACC_NO IS NULL OR ar.MASTER_ACC_NO = '') "
-		+ "  AND ar.CUSTOMER_NAME LIKE :term "
+		+ "WHERE ar.CUSTOMER_NAME LIKE :term "
+		+ ReceivableSql.NO_CREDIT_ACCOUNT
 		+ ReceivableSql.OPEN_BILL_PREDICATE
 		+ ReceivableSql.STALE_BILL_GUARD
 		+ "GROUP BY ar.CUSTOMER_NAME "
@@ -92,7 +92,16 @@ public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchM
 		+ "ORDER BY BILL_DATE ASC, ar.ACCOUNT_RECEIVABLES_ID ASC")
 	List<Object[]> findOpenBillsByMasterAccount(@Param("masterAccountNo") String masterAccountNo);
 
-	/** As above, for customers with no credit account. */
+	/**
+	 * As above, for a customer with no credit account.
+	 *
+	 * Restricted to rows carrying no account, which is what the search offered
+	 * under that name. Matching on the name alone returned every bill the
+	 * customer has, including the ones on their credit account - so picking
+	 * "no credit account" for HAWAII DIBA loaded 21 bills owing 474,641 when
+	 * the search had promised 1 owing 14,864, and a payment meant for that one
+	 * bill would have cascaded across the other twenty.
+	 */
 	@Query(nativeQuery = true, value =
 		"SELECT ar.ACCOUNT_RECEIVABLES_ID, ar.SALES_BILL_ID, " + ReceivableSql.BILL_CODE + ", "
 		+ "       " + ReceivableSql.BILL_DATE + " AS BILL_DATE, "
@@ -100,6 +109,7 @@ public interface OpenBillRepository extends JpaRepository<CreditAllocationBatchM
 		+ "FROM account_receivables ar "
 		+ ReceivableSql.BILL_JOINS
 		+ "WHERE ar.CUSTOMER_NAME = :customerName "
+		+ ReceivableSql.NO_CREDIT_ACCOUNT
 		+ ReceivableSql.OPEN_BILL_PREDICATE
 		+ ReceivableSql.STALE_BILL_GUARD
 		+ "ORDER BY BILL_DATE ASC, ar.ACCOUNT_RECEIVABLES_ID ASC")
