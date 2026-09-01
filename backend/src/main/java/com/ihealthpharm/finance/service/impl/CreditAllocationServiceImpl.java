@@ -84,6 +84,15 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	/** Counter name in generateuniquecode, alongside SB, AR, GL and the rest. */
 	private static final String BATCH_REF_SEQUENCE = "CA";
 
+	/**
+	 * The counter the Receipts screen already numbers its receipts from.
+	 *
+	 * Sharing it means a settlement's receipt is numbered in the same series as
+	 * one taken by hand, and prints through the same ACCOUNT_RECEIVABLES_RECEIPT
+	 * report, so a customer cannot tell which route their payment took.
+	 */
+	private static final String RECEIPT_SEQUENCE = "ARR";
+
 	@Autowired
 	OpenBillRepository openBillRepository;
 
@@ -195,6 +204,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		// What was written, so the screen reports it rather than inferring it.
 		plan.setBatchRef(batch.getBatchRef());
 		plan.setStatus(batch.getStatus());
+		plan.setReceiptNumber(batch.getReceiptNumber());
 
 		if (isChequeHeld(request)) {
 			// Recorded, but the debt stands until the cheque is approved.
@@ -203,6 +213,8 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		}
 
 		settle(request, plan, batch);
+		// settle() is what issues the receipt number, so read it back after.
+		plan.setReceiptNumber(batch.getReceiptNumber());
 		log.info("Credit settlement {} applied: {} across {} bills for user {}", batch.getBatchRef(),
 				plan.getAllocatedAmount(), plan.getLines().size(), userName);
 
@@ -320,6 +332,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			receivable.setChequeAmount(Objects.nonNull(line.getPriorChequeAmt())
 					? line.getPriorChequeAmt().doubleValue() : null);
 			receivable.setChequeDate(line.getPriorChequeDt());
+			receivable.setUnique(line.getPriorUniqueReceiptNo());
 			accountReceivablesRepository.save(receivable);
 
 			// Contra entry. Applying the settlement credited this amount to the
@@ -503,7 +516,6 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		// settlement, which for a cheque is here. Leaving the overpayment action
 		// behind would quietly drop money the user had asked to hold on account.
 		request.setOverpaymentAction(batch.getOverpaymentAction());
-		request.setReceiptNumber(batch.getReceiptNumber());
 		return request;
 	}
 
@@ -582,7 +594,6 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		batch.setOrderConfirmedS(request.isOrderConfirmed() ? 'Y' : 'N');
 		batch.setPaymentType(request.getPaymentType());
 		batch.setPaymentRef(request.getPaymentRef());
-		batch.setReceiptNumber(request.getReceiptNumber());
 		batch.setChequeId(request.getChequeId());
 		batch.setChequeDate(request.getChequeDate());
 		batch.setOverpaymentAction(request.getOverpaymentAction());
@@ -704,6 +715,16 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 			payload.add(receivable);
 		}
 
+		// One receipt number across every bill this payment touched, which is how
+		// the Receipts screen groups a bulk payment into a single printed
+		// receipt - DPARR0205260003 covers 31 bills. Stamping the same value
+		// here means a settlement prints through the very same report.
+		String receiptNumber = nextDocumentCode(RECEIPT_SEQUENCE);
+		for (AccountReceivablesModel receivable : payload) {
+			receivable.setUnique(receiptNumber);
+		}
+		batch.setReceiptNumber(receiptNumber);
+
 		BigDecimal heldOnAccount = holdRemainderOnAccount(request, plan, payload);
 
 		// Measured, not assumed. The receivables update frees credit back onto
@@ -790,6 +811,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		line.setPriorChequeAmt(Objects.nonNull(receivable.getChequeAmount())
 				? BigDecimal.valueOf(receivable.getChequeAmount()) : null);
 		line.setPriorChequeDt(receivable.getChequeDate());
+		line.setPriorUniqueReceiptNo(receivable.getUnique());
 
 		SalesModel priorBill = Objects.nonNull(planLine.getSalesBillId())
 				? salesRepository.findById(planLine.getSalesBillId()).orElse(null) : null;
@@ -965,39 +987,48 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	}
 
 	/**
-	 * Batch reference in the house style: DPCA + ddMMyy + a running number.
-	 *
-	 * The number comes from the shared document counter, moved on by a single
-	 * atomic UPDATE. It used to be COUNT(*) + 1 over the day's existing
-	 * references, which two people settling at the same moment both read
-	 * identically - BATCH_REF is UNIQUE, so the second settlement died on a raw
-	 * constraint violation rather than taking the next number.
-	 *
-	 * Deliberately not UniqueCodeService.findByUniqueCodeName: that reads, adds
-	 * one and saves, with no transaction, no lock and no @Version, so it has the
-	 * very race being fixed here. Only the counter row is shared with it.
-	 *
-	 * Like every other code in that table the number runs on rather than
-	 * resetting daily, so the date says when and the number says which. The
-	 * increment shares this method's transaction, so a settlement that is
-	 * refused puts its number back rather than burning it - verified by
-	 * refusing one and watching the counter hold.
+	 * Batch reference in the house style: DPCA + ddMMyy + the day's sequence.
 	 */
 	private String nextBatchRef() {
-		if (uniqueCodeRepository.incrementUniqueCodeNumber(BATCH_REF_SEQUENCE) == 0) {
+		return nextDocumentCode(BATCH_REF_SEQUENCE);
+	}
+
+	/**
+	 * The next document code of a given kind, in the house format:
+	 * DP + the code name + ddMMyy + a four digit number.
+	 *
+	 * The number comes from generateuniquecode, the table the rest of the
+	 * system numbers its documents from, and a nightly event
+	 * (generateuniquecodereset) puts every counter back to zero - which is why
+	 * the date is part of the code and the number only has to be unique within
+	 * the day.
+	 *
+	 * Moved on by a single atomic UPDATE so the database holds a row lock for
+	 * the duration and a second caller waits rather than reading a stale value.
+	 * Deliberately not UniqueCodeService.findByUniqueCodeName, despite that
+	 * being the house call: it reads, adds one and saves, with no transaction,
+	 * no lock and no @Version, so two callers can be handed the same number.
+	 * Only the counter row is shared with it.
+	 *
+	 * The increment shares the caller's transaction, so a settlement that is
+	 * refused puts its number back rather than burning it.
+	 */
+	private String nextDocumentCode(String codeName) {
+		if (uniqueCodeRepository.incrementUniqueCodeNumber(codeName) == 0) {
 			throw new IHealthPharmException(
-					"The credit settlement numbering row is missing. Run "
-					+ "credit_allocation_batch_ref_sequence.sql before settling.",
+					"The '" + codeName + "' numbering row is missing from generateuniquecode. "
+					+ "Run credit_allocation_batch_ref_sequence.sql before settling.",
 					HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
-		Integer sequence = uniqueCodeRepository.findUniqueCodeNumber(BATCH_REF_SEQUENCE);
+		Integer sequence = uniqueCodeRepository.findUniqueCodeNumber(codeName);
 		if (!Objects.nonNull(sequence)) {
-			throw new IHealthPharmException("Could not generate a settlement reference.",
+			throw new IHealthPharmException("Could not generate a '" + codeName + "' number.",
 					HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
-		return String.format("DPCA%s%04d", new SimpleDateFormat("ddMMyy").format(new Date()), sequence);
+		return String.format("DP%s%s%04d", codeName,
+				new SimpleDateFormat("ddMMyy").format(new Date()), sequence);
 	}
 
 	private void validateRequest(CreditAllocationRequestDTO request) {

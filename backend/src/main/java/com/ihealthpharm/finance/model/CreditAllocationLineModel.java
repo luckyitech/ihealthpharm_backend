@@ -128,6 +128,16 @@ public class CreditAllocationLineModel extends AuditModel {
 	@Column(name = "PRIOR_BILL_CREDIT_AMOUNT")
 	private BigDecimal priorBillCreditAmount;
 
+	/**
+	 * The receipt the bill belonged to before this settlement, if any.
+	 *
+	 * Settling stamps its own receipt number across every bill it touches, so
+	 * reversing has to put the old one back - otherwise a bill that is no
+	 * longer part of a payment still prints on its receipt.
+	 */
+	@Column(name = "PRIOR_UNIQUE_RECEIPT_NO", length = 45)
+	private String priorUniqueReceiptNo;
+
 	@Column(name = "RESULTING_PAYMENT_STATUS", length = 20)
 	private String resultingPaymentStatus;
 

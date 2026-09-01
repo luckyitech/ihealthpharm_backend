@@ -67,6 +67,5 @@ public class CreditAllocationRequestDTO implements Serializable {
 	/** Employee recorded as approving the settlement. */
 	private Integer approvedBy;
 
-	private String receiptNumber;
 
 }

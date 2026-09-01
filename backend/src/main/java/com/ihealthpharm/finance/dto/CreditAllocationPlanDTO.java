@@ -59,6 +59,17 @@ public class CreditAllocationPlanDTO implements Serializable {
 	/** ALLOCATED or HELD_PENDING_APPROVAL, as recorded on the batch. */
 	private String status;
 
+	/**
+	 * The receipt this settlement issued, for the screen to print.
+	 *
+	 * Generated here rather than typed: the system numbers its own receipts,
+	 * and the same number is stamped on every bill the payment touched so the
+	 * existing ACCOUNT_RECEIVABLES_RECEIPT report gathers them into one
+	 * document. Null while a cheque is still held, because nothing has been
+	 * received yet.
+	 */
+	private String receiptNumber;
+
 	public boolean isFullyAllocated() {
 		return unallocatedAmount != null && unallocatedAmount.signum() == 0;
 	}
