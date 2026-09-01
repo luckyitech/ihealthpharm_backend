@@ -178,7 +178,9 @@ public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 		// Sized to the content rather than in equal-ish blocks: the two
 		// references are fourteen and sixteen characters, the amounts seven,
 		// and TYPE only has to hold "MPesa". At even widths the seventh column
-		// broke "Cash" across two lines.
+		// broke "Cash" across two lines. BAL DUE gets a little more than the
+		// amount beside it so its heading stays on one line; the two long
+		// references wrap either way.
 		//
 		// Applied only when it matches the configured columns. The columns come
 		// from reports_mapping.REPORT_HEADER and these widths do not, so the
@@ -187,7 +189,7 @@ public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 		// columns" onto the page instead of a receipt. Even widths are a poor
 		// layout but a readable one, which beats an exception in a customer's
 		// hand.
-		int[] columnWidths = {3,15,16,11,10,10,7};
+		int[] columnWidths = {3,14,15,11,10,12,7};
 		if (columnWidths.length == headerList.size()) {
 			table.setWidths(columnWidths);
 		} else {

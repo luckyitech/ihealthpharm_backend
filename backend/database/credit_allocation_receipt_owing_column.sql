@@ -1,5 +1,5 @@
 -- ============================================================================
--- Show what is still owed on each bill of a receivables receipt
+-- Show what is still due on each bill of a receivables receipt
 -- ============================================================================
 --   mysql -u root -p ihealthpharm < backend/database/credit_allocation_receipt_owing_column.sql
 --
@@ -25,6 +25,6 @@
 -- ============================================================================
 
 UPDATE `reports_mapping`
-SET `REPORT_HEADER` = '[{"displayName":"S NO","columnName":"S_NO","position":1},{"displayName":"REC NO","columnName":"RECEIPT_NO","position":2},{"displayName":"BILL NO","columnName":"SOURCE_REF","position":3},{"displayName":"REC DT","columnName":"RECEIPT_DATE","position":4},{"displayName":"AMT REC","columnName":"AMOUNT_RECEIVED","position":5},{"displayName":"OWING","columnName":"AMOUNT_TO_BE_RECEIVED","position":6},{"displayName":" TYPE","columnName":"TYPE","position":7}]'
+SET `REPORT_HEADER` = '[{"displayName":"S NO","columnName":"S_NO","position":1},{"displayName":"REC NO","columnName":"RECEIPT_NO","position":2},{"displayName":"BILL NO","columnName":"SOURCE_REF","position":3},{"displayName":"REC DT","columnName":"RECEIPT_DATE","position":4},{"displayName":"AMT REC","columnName":"AMOUNT_RECEIVED","position":5},{"displayName":"BAL DUE","columnName":"AMOUNT_TO_BE_RECEIVED","position":6},{"displayName":" TYPE","columnName":"TYPE","position":7}]'
 WHERE `REPORT_CODE` = 'ACCOUNT_RECEIVABLES_RECEIPT'
   AND `REPORT_HEADER` NOT LIKE '%AMOUNT_TO_BE_RECEIVED%';
