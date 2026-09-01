@@ -506,8 +506,6 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 	private CreditAllocationRequestDTO toRequest(CreditAllocationBatchModel batch) {
 		CreditAllocationRequestDTO request = new CreditAllocationRequestDTO();
 		request.setMasterAccountNo(batch.getMasterAccountNo());
-		request.setCustomerId(batch.getCustomerId());
-		request.setPharmacyId(batch.getPharmacyId());
 		request.setPaymentType(batch.getPaymentType());
 		request.setPaymentRef(batch.getPaymentRef());
 		request.setApprovedBy(batch.getApprovedBy());
@@ -585,8 +583,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		CreditAllocationBatchModel batch = new CreditAllocationBatchModel();
 		batch.setBatchRef(nextBatchRef());
 		batch.setMasterAccountNo(request.getMasterAccountNo());
-		batch.setCustomerId(request.getCustomerId());
-		batch.setPharmacyId(request.getPharmacyId());
+		identifyAccount(batch, request);
 		batch.setPaymentAmount(plan.getPaymentAmount());
 		batch.setAllocatedAmount(plan.getAllocatedAmount());
 		batch.setUnallocatedAmount(plan.getUnallocatedAmount());
@@ -600,6 +597,7 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		batch.setApprovedBy(request.getApprovedBy());
 		batch.setApprovedDate(new Date());
 		batch.setPriorCreditLimitLeft(currentCreditLimitLeft(request.getMasterAccountNo()));
+
 		batch.setBackfillS(request.isBackfill() ? 'Y' : 'N');
 		batch.setActiveS('Y');
 		batch.setCreatedUser(userName);
@@ -608,6 +606,34 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 				: CreditAllocationBatchModel.STATUS_ALLOCATED);
 
 		return creditAllocationBatchRepository.save(batch);
+	}
+
+	/**
+	 * Puts the account's numeric ids on the batch.
+	 *
+	 * The batch has always recorded MASTER_ACCOUNT_NO, the credit code, but its
+	 * CUSTOMER_ID, MASTER_ACCOUNT_ID and PHARMACY_ID columns sat empty because
+	 * nothing sent them - the screen has no reason to know an internal id, and
+	 * asking it to would be asking the browser for something the server can
+	 * look up. Two repository methods keyed on those columns were unreachable
+	 * as a result.
+	 *
+	 * All three come off the account the credit code already identifies. A
+	 * settlement made by customer name has no such account, so its pharmacy is
+	 * taken from the bills being settled instead - they all belong to one.
+	 */
+	private void identifyAccount(CreditAllocationBatchModel batch, CreditAllocationRequestDTO request) {
+		MasterAccountModel account = StringUtils.isNotBlank(request.getMasterAccountNo())
+				? masterAccountRepository.getDataByMasterCreditNumber(request.getMasterAccountNo().trim())
+				: null;
+
+		if (Objects.nonNull(account)) {
+			batch.setMasterAccountId(account.getMasterAccountId());
+			batch.setPharmacyId(account.getPharmacyId());
+			if (Objects.nonNull(account.getCustomerId())) {
+				batch.setCustomerId(account.getCustomerId().getCustomerId());
+			}
+		}
 	}
 
 	/** Recorded before settling, so reversal restores rather than recalculates. */
@@ -726,6 +752,13 @@ public class CreditAllocationServiceImpl implements CreditAllocationService {
 		batch.setReceiptNumber(receiptNumber);
 
 		BigDecimal heldOnAccount = holdRemainderOnAccount(request, plan, payload);
+
+		if (!Objects.nonNull(batch.getPharmacyId()) && !payload.isEmpty()
+				&& Objects.nonNull(payload.get(0).getPharmacyModel())) {
+			// Settled by customer name, so there was no account to read a
+			// pharmacy from; the bills carry one.
+			batch.setPharmacyId(payload.get(0).getPharmacyModel().getPharmacyId());
+		}
 
 		// Measured, not assumed. The receivables update frees credit back onto
 		// the account, usually by the amount allocated but not always - a

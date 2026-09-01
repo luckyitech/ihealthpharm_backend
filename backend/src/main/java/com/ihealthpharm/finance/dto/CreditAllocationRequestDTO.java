@@ -26,9 +26,7 @@ public class CreditAllocationRequestDTO implements Serializable {
 	 */
 	private String customerName;
 
-	private Integer customerId;
 
-	private Integer pharmacyId;
 
 	private BigDecimal paymentAmount;
 
