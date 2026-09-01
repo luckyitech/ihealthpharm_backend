@@ -82,7 +82,7 @@ SELECT 'CUSTOMER_CREDIT_STATEMENT',
        'CUSTOMER CREDIT STATEMENT',
        'CUSTOMER_CREDIT_STATEMENT(?)',
        '[{"fieldName":"ACCOUNT NO","columnName":"MASTER_ACC_NO","type":"String","operator":"EQ","alias":"ar."},{"fieldName":"CUSTOMER NAME","columnName":"CUSTOMER_NAME","type":"String","operator":"EQ","alias":"ar."}]',
-       'STATEMENT OF ACCOUNT',
+       'STATEMENT OF OUTSTANDING',
        r.HEADER_CONTENT, r.FOOTER_CONTENT,
        r.SHOW_VERTICAL_LINES, r.SHOW_BAR_CHARTS,
        'com.ihealthpharm.reports.helper.CustomerCreditStatementPdf'
