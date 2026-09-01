@@ -36,7 +36,12 @@ import com.itextpdf.text.pdf.PdfPCell;
 import com.itextpdf.text.pdf.PdfPTable;
 import com.itextpdf.text.pdf.PdfWriter;
 
+import lombok.extern.slf4j.Slf4j;
+
 @Component
+// Lombok's @Slf4j logger on the parent is private, so a subclass cannot see it.
+// Declaring one here is what every other helper in this package does.
+@Slf4j
 public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 
 
@@ -47,7 +52,11 @@ public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 		try {
 			PdfWriter writer = PdfWriter.getInstance(document, new FileOutputStream(responseFile));
 			//writer.setSpaceCharRatio(PdfWriter.NO_SPACE_CHAR_RATIO);
-			document.setMargins(40,30,0,0);
+			// 80mm of paper is 227pt. The old 40pt and 30pt side margins left
+			// only 157pt - about 55mm - to print in, which is why the columns
+			// wrapped so hard and the last one ran off the edge. A till roll
+			// wants a narrow margin, not a letterhead's.
+			document.setMargins(8,8,0,0);
 			document.setMarginMirroringTopBottom(true);
 			document.open();
 			addHeader(writer, document,model);
@@ -160,9 +169,37 @@ public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 
 
 		PdfPTable table = new PdfPTable(headerList.size());
-		table.setWidths(new int[] {1,2,2,1,1,1});
-		table.setTotalWidth(Utilities.millimetersToPoints(80));
-		table.setLockedWidth(true);
+		// One width per configured column: S NO, REC NO, BILL NO, REC DT,
+		// AMT REC, OWING, TYPE. The columns themselves come from
+		// reports_mapping.REPORT_HEADER, but these widths do not, so the two
+		// have to be changed together - a mismatch throws on setWidths.
+		// The references and the two amounts get the room; TYPE is printed on
+		// the first line only and S NO is a single digit.
+		// Sized to the content rather than in equal-ish blocks: the two
+		// references are fourteen and sixteen characters, the amounts seven,
+		// and TYPE only has to hold "MPesa". At even widths the seventh column
+		// broke "Cash" across two lines.
+		//
+		// Applied only when it matches the configured columns. The columns come
+		// from reports_mapping.REPORT_HEADER and these widths do not, so the
+		// two can disagree - ACCOUNT_RECEIVABLES_RECEIPT_DUAL configures
+		// fifteen and has been printing "DocumentException: Wrong number of
+		// columns" onto the page instead of a receipt. Even widths are a poor
+		// layout but a readable one, which beats an exception in a customer's
+		// hand.
+		int[] columnWidths = {3,15,16,11,10,10,7};
+		if (columnWidths.length == headerList.size()) {
+			table.setWidths(columnWidths);
+		} else {
+			log.warn("Receipt {} configures {} columns but {} widths are defined; "
+					+ "falling back to even widths", model.getReportCode(), headerList.size(),
+					columnWidths.length);
+		}
+		// Fill the printable width rather than the paper width. The page is
+		// 80mm but the document sets 40pt and 30pt margins, so only about 55mm
+		// of it can be printed on; locking the table to 80mm pushed the last
+		// column off the edge, which is why TYPE was being cut in half.
+		table.setWidthPercentage(100);
 		table.setSpacingAfter(10);
 		PdfPCell cell = null;
 		for (HeaderDto hearder : headerList) {
@@ -173,6 +210,7 @@ public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 
 			cell = new PdfPCell(headerCell);
 			cell.setHorizontalAlignment(Element.ALIGN_LEFT);
+			cell.setPadding(1f);
 			if(!model.isShowVerticalLines())
 				cell.setBorder(Rectangle.BOTTOM);
 
@@ -204,6 +242,9 @@ public class AccountReceivablesReceiptPdf extends ReportsPDFUtility{
 						cell = new PdfPCell(new Phrase(String.valueOf(value),bold));
 					}
 					cell.setHorizontalAlignment(Element.ALIGN_LEFT);
+					// Seven columns on an 80mm roll cannot afford the default
+					// 2pt each side; that alone was a centimetre of the width.
+					cell.setPadding(1f);
 					if(!model.isShowVerticalLines())
 						cell.setBorder(Rectangle.BOTTOM);
 
