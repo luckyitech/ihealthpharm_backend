@@ -14,6 +14,14 @@
 -- group the items under their bill. Ordered oldest debt first, which is the
 -- order the conversation with the customer goes in.
 --
+-- Paid and owing come from the BILL, not from the debt record. A bill can carry
+-- more than one open record - 91 of them do - and the records disagree with
+-- each other: DPSB2701230028 has three, claiming 2,698, 355 and 355 against a
+-- bill owing 355, one of which has received nothing. Reading a record meant the
+-- statement printed "paid 0.00" for a bill the customer had paid 3,115 on,
+-- decided by whichever record the database happened to return first. The bill
+-- knows what it is owed; the records are what is unreliable.
+--
 -- Which bills count is deliberately the same rule the settlement screen uses -
 -- Sales Billing only, Pending or Partially Paid, something still to receive,
 -- and not one of the stale rows whose bill carries no balance. A statement that
@@ -33,8 +41,8 @@ SET BASE_SQL = 'select ar.MASTER_ACC_NO, ar.CUSTOMER_NAME,
   date_format(coalesce(s1.BILL_DATE,s2.BILL_DATE,s3.BILL_DATE,ar.RECEIPT_DATE),"%d-%m-%y") as BILL_DATE,
   datediff(curdate(), coalesce(s1.BILL_DATE,s2.BILL_DATE,s3.BILL_DATE,ar.RECEIPT_DATE)) as DAYS_OWING,
   coalesce(s1.NET_AMOUNT,s2.NET_AMOUNT,s3.NET_AMOUNT) as BILL_TOTAL,
-  coalesce(ar.AMOUNT_RECEIVED,0) as PAID,
-  ar.AMOUNT_TO_BE_RECEIVED as OWING,
+  coalesce(s1.PAID_AMOUNT, s2.PAID_AMOUNT, s3.PAID_AMOUNT, ar.AMOUNT_RECEIVED, 0) as PAID,
+  coalesce(s1.BALANCE_AMOUNT, s2.BALANCE_AMOUNT, s3.BALANCE_AMOUNT, ar.AMOUNT_TO_BE_RECEIVED) as OWING,
   coalesce(i.ITEM_NM,"") as ITEM_NM,
   coalesce(si.SALE_QTY,0) as SALE_QTY,
   ma.CREDIT_LIMIT, ma.CREDIT_LIMIT_LEFT
