@@ -62,8 +62,20 @@ where ar.SOURCE_TYPE = "Sales Billing"
 
 -- The caller's filter arrives as " WHERE 1 = 1 AND ...", so its WHERE is
 -- replaced with AND to graft it onto the conditions above.
-SET @FINAL_SQL = CONCAT(BASE_SQL, ' AND ', SUBSTRING(WHERECLAUSE, 8),
-                        ' order by DAYS_OWING desc, BILL_CODE, ITEM_NM');
+SET @FINAL_SQL = CONCAT(BASE_SQL, ' AND ', SUBSTRING(WHERECLAUSE, 8));
+
+-- Asking by customer name means the customer has no credit account - that is
+-- the only way the screen offers them by name, and the search counts only
+-- their unaccounted bills under that heading. Without this, a statement for
+-- HAWAII DIBA "no credit account" listed 17 bills owing 448,859 when her
+-- unaccounted debt is one bill owing 14,864: it swept in everything on her
+-- credit account and would have been handed to her as a demand.
+IF LOCATE('CUSTOMER_NAME', WHERECLAUSE) > 0 THEN
+  SET @FINAL_SQL = CONCAT(@FINAL_SQL,
+      ' and (ar.MASTER_ACC_NO is null or ar.MASTER_ACC_NO = "")');
+END IF;
+
+SET @FINAL_SQL = CONCAT(@FINAL_SQL, ' order by DAYS_OWING desc, BILL_CODE, ITEM_NM');
 
 PREPARE stmt FROM @FINAL_SQL;
 EXECUTE stmt;
