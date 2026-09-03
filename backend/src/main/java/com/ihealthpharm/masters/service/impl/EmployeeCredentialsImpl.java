@@ -179,13 +179,11 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 			throw new IHealthPharmException("Approval PIN is incorrect.", HttpStatus.UNAUTHORIZED);
 		}
 
-		// Correct PIN, still stored in the clear - hash it now, as passwords are.
-		if (!LegacyAwarePasswordEncoder.isBCryptHash(storedPin)) {
-			credentials.setApprovalAccessPin(passwordEncoder.encode(rawPin));
-			employeeCredentialsRepository.save(credentials);
-			log.info("Migrated legacy plaintext approval PIN to BCrypt for employee credentials ID:"
-					+ credentials.getEmployeeCredentialsId());
-		}
+		// The stored PIN is left exactly as it is, plain text included. Receipts, Credit Note,
+		// Debit Note and Pending Payables fetch the stored PIN and compare it in the browser, so
+		// hashing it here would silently stop those screens approving anything, and would leave
+		// the PIN uneditable on Master > Employee > Access, which validates the field as six
+		// digits. Hashing can follow once those screens verify the PIN server-side.
 	}
 
 	@Override
