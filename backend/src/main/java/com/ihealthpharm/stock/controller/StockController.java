@@ -69,6 +69,17 @@ public class StockController {
 	 * @author Gunasekhar 
 	 * Service is to update the stock
 	 */
+	/**
+	 * Updates only the MRP of a stock record. Deliberately narrow: a full
+	 * StockModel save replaces every column, which would null out lazily
+	 * loaded links such as pharmacy.
+	 */
+	@PutMapping("/update/stockmrp")
+	public ResponseEntity<BaseDto<Integer>> updateStockMrp(@RequestParam Integer stockId, @RequestParam Double mrp) {
+		Integer updated = stockService.updateStockMrp(stockId, mrp);
+		return new BaseDto<>(updated, stockHelper.getUpdateStockMessage(), OK).respond();
+	}
+
 	@PutMapping("/update/stock")
 	public ResponseEntity<BaseDto<StockModel>> updateStock(@Valid @RequestBody StockModel stockModel) {
 		log.info("Request Object for update is: ",stockModel.toString());
