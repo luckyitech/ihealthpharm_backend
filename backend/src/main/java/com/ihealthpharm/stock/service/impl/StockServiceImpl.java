@@ -457,6 +457,11 @@ public class StockServiceImpl implements StockService {
 	}
 
 	@Override
+	public Integer updateStockMrp(Integer stockId, Double mrp) {
+		return stockRepository.updateStockMrp(stockId, mrp);
+	}
+
+	@Override
 	public List<ItemsForStockAdjustDTO> getStockAdjustRecords(Integer stockId) {
 		return stockRepository.getStockRecordById(stockId);
 	}

@@ -111,5 +111,7 @@ public interface StockService {
 	List<StockModel> findByItemAndPharmacyInEditStock(String searchTerm, String searchCode, Integer pharmacyId,
 			Integer pageNumber, Integer pageSize);
 
+	Integer updateStockMrp(Integer stockId, Double mrp);
+
 
 }
