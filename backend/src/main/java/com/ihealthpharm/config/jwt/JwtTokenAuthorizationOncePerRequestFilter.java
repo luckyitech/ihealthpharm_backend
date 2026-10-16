@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 
 @Component
 public class JwtTokenAuthorizationOncePerRequestFilter extends OncePerRequestFilter {
@@ -43,19 +44,36 @@ public class JwtTokenAuthorizationOncePerRequestFilter extends OncePerRequestFil
 		final String requestTokenHeader = request.getHeader(this.tokenHeader);
 		String username = null;
 		String jwtToken = null;
-		logger.info("----------------------------------------------");
-		logger.info(requestTokenHeader);
+		// The token is NOT logged. It is a bearer credential: anyone holding it
+		// is the user until it expires, and logs are read by more people than
+		// should be able to act as that user.
 		if (requestTokenHeader != null && requestTokenHeader.startsWith("Bearer ")) {
 			jwtToken = requestTokenHeader.substring(7);
 			try {
 				username = jwtTokenUtil.getUsernameFromToken(jwtToken);
-			} catch (IllegalArgumentException e) {
-				logger.error("JWT_TOKEN_UNABLE_TO_GET_USERNAME", e);
 			} catch (ExpiredJwtException e) {
-				logger.warn("JWT_TOKEN_EXPIRED", e);
+				logger.debug("Token expired; continuing unauthenticated.");
+			} catch (JwtException | IllegalArgumentException e) {
+				// An unusable token is treated exactly like no token at all.
+				//
+				// It must not fail the request. This filter is a @Component, so
+				// Spring Boot registers it for every request - including the
+				// paths WebSecurity.ignoring() exempts, /authenticate among
+				// them. Letting the exception escape therefore breaks LOGIN for
+				// anyone whose browser is holding a token the server will not
+				// accept.
+				//
+				// That is not hypothetical: rotating the signing key invalidates
+				// every token in circulation at once, and the Angular
+				// interceptor attaches the stale one to the login request. An
+				// uncaught SignatureException here would lock out every user on
+				// the deploy that rotates the key, with no way back except
+				// clearing browser storage by hand.
+				//
+				// A request carrying a bad token simply arrives unauthenticated:
+				// public endpoints serve it, protected ones answer 401.
+				logger.debug("Unusable token ignored: {}", e.getClass().getSimpleName());
 			}
-		} else {
-			logger.warn("JWT_TOKEN_DOES_NOT_START_WITH_BEARER_STRING");
 		}
 
 		logger.debug("JWT_TOKEN_USERNAME_VALUE '{}'", username);
