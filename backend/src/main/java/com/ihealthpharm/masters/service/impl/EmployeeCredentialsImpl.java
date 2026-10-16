@@ -60,6 +60,7 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 		}
 
 		encodePasswordFields(employeeCredentialsModel);
+		preserveTwoFactorState(employeeCredentialsRes, employeeCredentialsModel);
 		employeeCredentialsRes = employeeCredentialsRepository.save(employeeCredentialsModel);
 		log.info("Employee Credentials data with ID : " + employeeCredentialsRes.getEmployeeCredentialsId()
 				+ " updated succesfully");
@@ -78,6 +79,7 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 			}
 
 			encodePasswordFields(employeeCredentialsModel);
+			preserveTwoFactorState(employeeCredentialsRes, employeeCredentialsModel);
 			employeeCredentialsRes = employeeCredentialsRepository.save(employeeCredentialsModel);
 			log.info("Employee Credentials data with ID : " + employeeCredentialsRes.getEmployeeCredentialsId()
 					+ " updated succesfully");
@@ -129,6 +131,41 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 		return employeeCredentialsRes;
 	}
 	
+	@Override
+	public String resolveLoginIdentifier(String identifier) {
+		if (identifier == null) {
+			return null;
+		}
+		String typed = identifier.trim();
+
+		// Only an address can be an address. Skipping the lookup for anything
+		// without an '@' keeps the ordinary username path at one query.
+		if (!typed.contains("@")) {
+			return typed;
+		}
+
+		List<EmployeeCredentialsModel> matches = employeeCredentialsRepository
+				.findActiveByWorkEmail(typed);
+
+		if (matches.size() == 1) {
+			return matches.get(0).getUserName();
+		}
+
+		if (matches.size() > 1) {
+			// A shared mailbox - several relief staff on one supervisor's
+			// address. The email cannot say which of them is signing in, so
+			// they use their usernames. Logged because the user will report
+			// this as "my email does not work" and nothing else would explain it.
+			log.warn("Work email matched {} active accounts, so it cannot identify one. "
+					+ "Those users must sign in with their username.", matches.size());
+		}
+
+		// Unresolved: hand back what was typed so authentication fails with the
+		// same message a wrong password gives. Saying "no such email" here would
+		// let anyone test which addresses hold accounts.
+		return typed;
+	}
+
 	public EmployeeCredentialsModel getValidSupplierContract(int employeeCredentialId) {
 		EmployeeCredentialsModel employeeCredentialsRes = null;
 
@@ -184,6 +221,30 @@ public class EmployeeCredentialsImpl implements EmployeeCredentialsService {
 		// hashing it here would silently stop those screens approving anything, and would leave
 		// the PIN uneditable on Master > Employee > Access, which validates the field as six
 		// digits. Hashing can follow once those screens verify the PIN server-side.
+	}
+
+	/**
+	 * Carries two-factor state from the stored row onto an incoming one before
+	 * it is saved.
+	 *
+	 * <p>The Employee Access screen posts a whole EmployeeCredentialsModel and
+	 * does not send the TWO_FACTOR_* fields, so Jackson leaves them null and a
+	 * full-row save would write those nulls over a user's enrolment - silently
+	 * un-enrolling them, or locking them out mid-rollout, the next time an
+	 * administrator edited anything on their Access tab. The same shape as the
+	 * PUT /update/stock bug that wiped PHARMACY_ID.
+	 *
+	 * <p>Two-factor state is owned by the targeted updates on
+	 * EmployeeCredentialsRepository. Nothing else may write it, so here the
+	 * stored values always win.
+	 */
+	private void preserveTwoFactorState(EmployeeCredentialsModel stored, EmployeeCredentialsModel incoming) {
+		if (stored == null || incoming == null) {
+			return;
+		}
+		incoming.setTwoFactorEmail(stored.getTwoFactorEmail());
+		incoming.setTwoFactorEmailVerifiedS(stored.getTwoFactorEmailVerifiedS());
+		incoming.setTwoFactorEnabledS(stored.getTwoFactorEnabledS());
 	}
 
 	@Override

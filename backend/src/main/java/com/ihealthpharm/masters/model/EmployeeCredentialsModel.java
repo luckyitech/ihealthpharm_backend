@@ -60,4 +60,39 @@ public class EmployeeCredentialsModel extends AuditModel implements Serializable
 	
 	@Column( name = "PASSWORD_STATUS",length=4)
 	private Integer passwordStatus;
+
+	/**
+	 * Y when this account is challenged for an emailed code at login.
+	 *
+	 * <p>The three TWO_FACTOR_* fields below are NOT written through
+	 * {@code save()}. The Employee Access screen posts a whole
+	 * EmployeeCredentialsModel and does not send them, so a full-row save would
+	 * write nulls over a user's enrolment and silently un-enrol them. They are
+	 * written only by the targeted updates on
+	 * {@code EmployeeCredentialsRepository}, and
+	 * {@code EmployeeCredentialsImpl.updateEmployeeCredentialsData} copies them
+	 * off the stored row before saving so the screen cannot clear them.
+	 */
+	@Column(name="TWO_FACTOR_ENABLED_S", length=1)
+	private Character twoFactorEnabledS;
+
+	/**
+	 * Where login codes are sent. Set by the user who proved they can read it,
+	 * never by an administrator, and deliberately separate from
+	 * {@code employee.EMAIL_ID} - that is HR data, was never collected to prove
+	 * identity, and in at least one case holds another employee's address.
+	 */
+	@Column(name="TWO_FACTOR_EMAIL", length=100)
+	private String twoFactorEmail;
+
+	/** Y only once a code sent to twoFactorEmail came back. No code is ever sent to an unverified address. */
+	@Column(name="TWO_FACTOR_EMAIL_VERIFIED_S", length=1)
+	private Character twoFactorEmailVerifiedS;
+
+	/** True when this account should be asked for a code: enabled, with an address that was proven. */
+	public boolean isTwoFactorActive() {
+		return twoFactorEnabledS != null && twoFactorEnabledS == 'Y'
+				&& twoFactorEmailVerifiedS != null && twoFactorEmailVerifiedS == 'Y'
+				&& twoFactorEmail != null && !twoFactorEmail.trim().isEmpty();
+	}
 }

@@ -15,6 +15,21 @@ public interface EmployeeCredentialsService {
 	 List<EmployeeCredentialsModel> updateEmployeeCredentialsData(List<EmployeeCredentialsModel> employeeCredentialsModels);
 
 	 EmployeeCredentialsModel findEmployeeCredentialsByUserName(String userName);
+
+	/**
+	 * Turns whatever somebody typed into the login box into a username.
+	 *
+	 * <p>People may sign in with their username or with their work email, so
+	 * every later step needs one canonical answer. This is the single place that
+	 * decides it.
+	 *
+	 * <p>Anything that does not resolve to exactly one account is returned
+	 * unchanged, so authentication fails the ordinary way with the ordinary
+	 * message. That is deliberate: answering differently for "no such email"
+	 * than for "wrong password" would turn the login box into a way of finding
+	 * out which addresses have accounts.
+	 */
+	String resolveLoginIdentifier(String identifier);
 	
 	 EmployeeCredentialsRetriveModel findEmployeeCredentialByUserName(String userName);
 	
