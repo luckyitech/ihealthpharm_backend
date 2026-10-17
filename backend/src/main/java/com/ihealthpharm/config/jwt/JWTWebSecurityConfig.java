@@ -14,7 +14,6 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
@@ -42,7 +41,7 @@ public class JWTWebSecurityConfig extends WebSecurityConfigurerAdapter {
 
 	@Bean
 	public PasswordEncoder passwordEncoderBean() {
-		return new BCryptPasswordEncoder();
+		return new LegacyAwarePasswordEncoder();
 	}
 
 	@Bean
@@ -66,7 +65,16 @@ public class JWTWebSecurityConfig extends WebSecurityConfigurerAdapter {
 
 	@Override
 	public void configure(WebSecurity webSecurity) throws Exception {
-		webSecurity.ignoring().antMatchers(HttpMethod.POST, authenticationPath).
-		antMatchers(HttpMethod.OPTIONS, "/**").antMatchers(HttpMethod.GET,"/corona/**");// Should not be done in Production!
+		webSecurity.ignoring().antMatchers(HttpMethod.POST, authenticationPath)
+		// The two-factor steps are pre-authentication by definition: the caller
+		// has no token yet, which is the whole point of the second factor.
+		// Each is guarded by a short-lived single-use handle of its own.
+		.antMatchers(HttpMethod.POST, authenticationPath + "/2fa",
+				authenticationPath + "/2fa/email",
+				authenticationPath + "/2fa/email/confirm",
+				authenticationPath + "/2fa/resend").
+		antMatchers(HttpMethod.OPTIONS, "/**").antMatchers(HttpMethod.GET,"/corona/**")
+		// Safaricom posts the M-Pesa result with no token of its own.
+		.antMatchers(HttpMethod.POST, "/mpesa/callback/**");// Should not be done in Production!
 	}
 }
