@@ -2,6 +2,8 @@ package com.ihealthpharm.finance.service.impl;
 
 import java.text.DecimalFormat;
 import java.time.LocalDate;
+import java.util.Collections;
+import java.util.Arrays;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -1082,6 +1084,20 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 		return accountReceivablesRepository.findCustomersNamesBySearch(searchTerm);
 	}
 
+
+	/**
+	 * The Receipts status filter offers "Partially Paid & Pending" as one choice:
+	 * every bill that still has money owing. Any other value matches itself only.
+	 */
+	static final String PARTIALLY_PAID_AND_PENDING = "Partially Paid & Pending";
+
+	static List<String> paymentStatusFilter(String paymentStatus) {
+		if (PARTIALLY_PAID_AND_PENDING.equals(paymentStatus)) {
+			return Arrays.asList("Partially Paid", "Pending");
+		}
+		return Collections.singletonList(paymentStatus);
+	}
+
 	// popup searches
 
 	@Override
@@ -1101,7 +1117,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository.findAccReceivablesSearchByStatusSearchDate(start, end, sourceRef,
-					customerName, paymentStatus, limit);
+					customerName, paymentStatusFilter(paymentStatus), limit);
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))
@@ -1119,7 +1135,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 				&& (paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))) {
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
-			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchDatesAndStatus(paymentStatus,
+			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchDatesAndStatus(paymentStatusFilter(paymentStatus),
 					start, end, customerName, limit);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
@@ -1133,7 +1149,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 		else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRef(
-					paymentStatus, sourceRef, customerName, limit);
+					paymentStatusFilter(paymentStatus), sourceRef, customerName, limit);
 		}
 
 		else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
@@ -1141,13 +1157,13 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchStatusAndSourceNumber(
-					paymentStatus, sourceRef, customerName, limit);
+					paymentStatusFilter(paymentStatus), sourceRef, customerName, limit);
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchBySourceRef(sourceRef, customerName, limit);
 		} else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))) {
-			response = accountReceivablesRepository.findAccRecievablesSearchByStatus(paymentStatus, customerName,
+			response = accountReceivablesRepository.findAccRecievablesSearchByStatus(paymentStatusFilter(paymentStatus), customerName,
 					limit);
 		}
 
@@ -1168,7 +1184,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository.findAccReceivablesSearchByStatusSearchDateCount(start, end,
-					sourceRef, customerName, paymentStatus);
+					sourceRef, customerName, paymentStatusFilter(paymentStatus));
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))
@@ -1187,7 +1203,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository
-					.findAccRecievablesSearchByStatusSearchDatesAndStatusCount(paymentStatus, start, end, customerName);
+					.findAccRecievablesSearchByStatusSearchDatesAndStatusCount(paymentStatusFilter(paymentStatus), start, end, customerName);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))) {
@@ -1200,20 +1216,20 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 		else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository
-					.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRefCount(paymentStatus, sourceRef,
+					.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRefCount(paymentStatusFilter(paymentStatus), sourceRef,
 							customerName);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchStatusAndSourceNumberCount(
-					paymentStatus, sourceRef, customerName);
+					paymentStatusFilter(paymentStatus), sourceRef, customerName);
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchBySourceRefCount(sourceRef, customerName);
 		} else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))) {
-			response = accountReceivablesRepository.findAccRecievablesSearchByStatusCount(paymentStatus, customerName);
+			response = accountReceivablesRepository.findAccRecievablesSearchByStatusCount(paymentStatusFilter(paymentStatus), customerName);
 		}
 
 		return response;
@@ -1242,7 +1258,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository.findAccReceivablesSearchByStatusSearchDateForAccount(start, end,
-					sourceRef, creditNumber, paymentStatus, limit);
+					sourceRef, creditNumber, paymentStatusFilter(paymentStatus), limit);
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))
@@ -1261,7 +1277,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchDatesAndStatusForAcc(
-					paymentStatus, start, end, creditNumber, limit);
+					paymentStatusFilter(paymentStatus), start, end, creditNumber, limit);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))) {
@@ -1274,21 +1290,21 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 		else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository
-					.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRefForAcc(paymentStatus, sourceRef,
+					.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRefForAcc(paymentStatusFilter(paymentStatus), sourceRef,
 							creditNumber, limit);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchStatusAndSourceNumberForAcc(
-					paymentStatus, sourceRef, creditNumber, limit);
+					paymentStatusFilter(paymentStatus), sourceRef, creditNumber, limit);
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository.findAccRecievablesSearchBySourceRefForAcc(sourceRef, creditNumber,
 					limit);
 		} else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))) {
-			response = accountReceivablesRepository.findAccRecievablesSearchByStatusForAcc(paymentStatus, creditNumber,
+			response = accountReceivablesRepository.findAccRecievablesSearchByStatusForAcc(paymentStatusFilter(paymentStatus), creditNumber,
 					limit);
 		}
 		return response;
@@ -1308,7 +1324,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository.findAccReceivablesSearchByStatusSearchDateCountForAccounts(start,
-					end, sourceRef, creditNumber, paymentStatus);
+					end, sourceRef, creditNumber, paymentStatusFilter(paymentStatus));
 		}
 
 		else if ((sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))
@@ -1328,7 +1344,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			LocalDate start = LocalDate.parse(paymentStartDate);
 			LocalDate end = LocalDate.parse(paymentEndDate);
 			response = accountReceivablesRepository.findAccRecievablesSearchByStatusSearchDatesAndStatusCountForAccount(
-					paymentStatus, start, end, creditNumber);
+					paymentStatusFilter(paymentStatus), start, end, creditNumber);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))) {
@@ -1341,14 +1357,14 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 		else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository
-					.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRefCountForAcc(paymentStatus,
+					.findAccRecievablesSearchByStatusSearchBasedonStatusAndSourceRefCountForAcc(paymentStatusFilter(paymentStatus),
 							sourceRef, creditNumber);
 		} else if (((paymentStartDate != null && !paymentStartDate.equals("undefined")
 				&& !paymentStartDate.equals("null"))
 				&& (paymentEndDate != null && !paymentEndDate.equals("undefined") && !paymentEndDate.equals("null")))
 				&& (sourceRef != null && !sourceRef.equals("undefined") && !sourceRef.equals("null"))) {
 			response = accountReceivablesRepository
-					.findAccRecievablesSearchByStatusSearchStatusAndSourceNumberCountForAcc(paymentStatus, sourceRef,
+					.findAccRecievablesSearchByStatusSearchStatusAndSourceNumberCountForAcc(paymentStatusFilter(paymentStatus), sourceRef,
 							creditNumber);
 		}
 
@@ -1356,7 +1372,7 @@ public class AccountReceivablesServiceImpl implements AccountReceivablesService 
 			response = accountReceivablesRepository.findAccRecievablesSearchBySourceRefCountForAcc(sourceRef,
 					creditNumber);
 		} else if ((paymentStatus != null && !paymentStatus.equals("undefined") && !paymentStatus.equals("null"))) {
-			response = accountReceivablesRepository.findAccRecievablesSearchByStatusCountForAcc(paymentStatus,
+			response = accountReceivablesRepository.findAccRecievablesSearchByStatusCountForAcc(paymentStatusFilter(paymentStatus),
 					creditNumber);
 		}
 
