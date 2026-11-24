@@ -1,6 +1,9 @@
 package com.ihealthpharm.reports.service.impl;
 
 import java.io.File;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -65,21 +68,43 @@ public class ReportsServiceImpl implements ReportsService {
 		
 		ReportsMappingModel model = reportsMappingRepository.findByReportCode(String.valueOf(dataMap.get("ReportCode")));
 		
+		// Download options, not filters: prepareWhereClause only reads the
+		// configured input parameters, so these never reach the query.
+		//   AS_TABLE      print the rows as a plain table, even when the report
+		//                 has its own generator (a till-roll receipt, say), so a
+		//                 list of rows comes out as one sheet or one A4 table.
+		//   ONLY_ROWS_WITH {"column": [values]} keep only the rows whose column
+		//                 holds one of the values - the rows ticked in the grid.
+		boolean asTable = Boolean.parseBoolean(String.valueOf(dataMap.get("AS_TABLE")));
+		Object onlyRowsWith = dataMap.get("ONLY_ROWS_WITH");
+
 		List<Map<String,Object>> responseList =getReportData(model,dataMap);
+		if (onlyRowsWith instanceof Map && responseList != null) {
+			for (Map.Entry<String, Object> keep : ((Map<String, Object>) onlyRowsWith).entrySet()) {
+				if (!(keep.getValue() instanceof Collection))
+					continue;
+				Set<String> values = new HashSet<>();
+				for (Object v : (Collection<Object>) keep.getValue())
+					values.add(String.valueOf(v));
+				responseList.removeIf(row -> !values.contains(String.valueOf(row.get(keep.getKey()))));
+			}
+		}
 
 		String extension =".xls";
 		if(StringUtils.equalsIgnoreCase("PDF", reportType))
 			extension =".pdf";
 		
-		String fileName = model.getReportName() + extension;
-		responseFile = new File(System.getProperty("java.io.tmpdir") + fileName);
-		if (!responseFile.exists())
-			responseFile.createNewFile();
+		// A file of its own per request. This used to be tmpdir + report name,
+		// shared by every download of the same report: two at once (several
+		// receipts, or two users) wrote over and deleted each other's file and
+		// sent back corrupt or empty spreadsheets. The browser names the saved
+		// file itself, so the random suffix is never seen.
+		responseFile = File.createTempFile(model.getReportName().replaceAll("[^A-Za-z0-9]+", "_") + "_", extension);
 		
 		
 		if (StringUtils.equalsIgnoreCase("PDF", reportType)) {
 			
-			if (StringUtils.isBlank(model.getCustomReportGeneratorClazz()))
+			if (asTable || StringUtils.isBlank(model.getCustomReportGeneratorClazz()))
 				reportsPDFUtility.generateReport(responseList, model, responseFile,inputJson);
 			else {
 				Class beanClass = Class.forName(model.getCustomReportGeneratorClazz());
@@ -89,7 +114,7 @@ public class ReportsServiceImpl implements ReportsService {
 		
 		}else {
 			
-			if (StringUtils.isBlank(model.getCustomExcelReportGeneratorClazz()))
+			if (asTable || StringUtils.isBlank(model.getCustomExcelReportGeneratorClazz()))
 				reportsExcelUtility.generateReport(responseList, model, responseFile,inputJson);
 			else {
 				Class beanClass = Class.forName(model.getCustomExcelReportGeneratorClazz());
