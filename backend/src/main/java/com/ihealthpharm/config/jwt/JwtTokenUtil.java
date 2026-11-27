@@ -21,6 +21,7 @@ public class JwtTokenUtil implements Serializable {
 
 	static final String CLAIM_KEY_USERNAME = "sub";
 	static final String CLAIM_KEY_CREATED = "iat";
+	private static final long MILLIS_PER_SECOND = 1000L;
 	private static final long serialVersionUID = -3301605591108950415L;
 	private Clock clock = DefaultClock.INSTANCE;
 
@@ -92,10 +93,27 @@ public class JwtTokenUtil implements Serializable {
 	public Boolean validateToken(String token, UserDetails userDetails) {
 		JwtUserDetails user = (JwtUserDetails) userDetails;
 		final String username = getUsernameFromToken(token);
-		return (username.equals(user.getUsername()) && !isTokenExpired(token));
+		return (username.equals(user.getUsername()) && !isTokenExpired(token) && hasAllowedLifetime(token));
+	}
+
+	/**
+	 * False for a token issued to last longer than the server now allows.
+	 *
+	 * <p>Shortening the configured lifetime only affects tokens issued from then
+	 * on. Without this check a token issued under an older, longer setting would
+	 * keep working until its own expiry - weeks, under the previous default - and
+	 * the idle sign-out would not apply to anyone already signed in.
+	 */
+	private Boolean hasAllowedLifetime(String token) {
+		final Claims claims = getAllClaimsFromToken(token);
+		if (claims.getIssuedAt() == null || claims.getExpiration() == null) {
+			return false;
+		}
+		final long lifetimeMillis = claims.getExpiration().getTime() - claims.getIssuedAt().getTime();
+		return lifetimeMillis <= expiration * MILLIS_PER_SECOND;
 	}
 
 	private Date calculateExpirationDate(Date createdDate) {
-		return new Date(createdDate.getTime() + expiration * 1000);
+		return new Date(createdDate.getTime() + expiration * MILLIS_PER_SECOND);
 	}
 }
